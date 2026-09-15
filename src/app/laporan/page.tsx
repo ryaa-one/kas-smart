@@ -2,21 +2,25 @@
 
 import { useMemo, useState } from "react";
 import { useLang } from "@/lib/i18n/LanguageContext";
-import { useAuth } from "@/lib/auth";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Card } from "@/components/ui/Card";
 import { StatCard } from "@/components/ui/StatCard";
 import { Table, Th, Td } from "@/components/ui/Table";
 import { formatDate, formatRupiah } from "@/lib/format";
-import { mockProducts, mockSuppliers } from "@/lib/mock/master";
-import { mockDebts, mockPurchases, mockSales, mockAdjustments, purchaseTotal } from "@/lib/mock/owner";
+import {
+  useDb,
+  getDb,
+  purchaseTotal,
+  isSaleCompleted,
+  type Purchase,
+} from "@/lib/mock/db";
 
 type Tab = "sales" | "purchases" | "profit" | "stock" | "suppliers" | "debt" | "adjustments";
 
 // FR-15: 7 laporan, difilter berdasarkan tanggal. Data dihitung dari mock sales/purchases/adjustments.
 export default function LaporanPage() {
   const { t } = useLang();
-  const { user } = useAuth();
+  const db = useDb(); // semua laporan dari store bersama (H-7)
 
   const [tab, setTab] = useState<Tab>("sales");
   const [from, setFrom] = useState("");
@@ -27,17 +31,17 @@ export default function LaporanPage() {
     return (!from || d >= from) && (!to || d <= to);
   };
 
-  const sales = useMemo(() => mockSales.filter((s) => inRange(s.transaction_date)), [from, to]);
-  const purchases = useMemo(() => mockPurchases.filter((p) => inRange(p.purchase_date)), [from, to]);
+  const sales = useMemo(() => db.sales.filter((s) => isSaleCompleted(s) && inRange(s.transaction_date)), [db.sales, from, to]);
+  const purchases = useMemo(() => db.purchases.filter((p) => inRange(p.purchase_date)), [db.purchases, from, to]);
 
-  // Profit kotor = penjualan (status paid) - modal dari harga beli produk.
-  const paidSales = sales.filter((s) => s.status === "paid");
+  // Profit kotor = penjualan (lunas + hutang tercatat) - modal dari harga beli produk.
+  const paidSales = sales.filter((s) => isSaleCompleted(s));
   const salesRevenue = paidSales.reduce((s, x) => s + x.total, 0);
   const salesCost = paidSales.reduce(
     (s, x) =>
       s +
       x.details.reduce((d, item) => {
-        const p = mockProducts.find((mp) => mp.name === item.product_name);
+        const p = db.products.find((mp) => mp.id === item.product_id);
         return d + (p?.purchase_price ?? 0) * item.quantity;
       }, 0),
     0
@@ -58,16 +62,19 @@ export default function LaporanPage() {
   ];
 
   const debtTotals = useMemo(() => {
-    const total = mockDebts.reduce((s, d) => s + d.total_debt, 0);
-    const remaining = mockDebts.reduce((s, d) => s + d.remaining_debt, 0);
+    const total = db.debts.reduce((s, d) => s + d.total_debt, 0);
+    const remaining = db.debts.reduce((s, d) => s + d.remaining_debt, 0);
     return { total, remaining, paid: total - remaining };
-  }, []);
+  }, [db.debts]);
 
   const supplierRows = useMemo(() => {
     const map = new Map<string, { count: number; total: number }>();
-    purchases.forEach((p) => {
-      const cur = map.get(p.supplier_name) ?? { count: 0, total: 0 };
-      map.set(p.supplier_name, { count: cur.count + 1, total: cur.total + purchaseTotal(p) });
+    purchases.forEach((p: Purchase) => {
+      // Supplier opsional (ERD): pembelian tanpa supplier tidak masuk rekap supplier.
+      const name = p.supplier_id ? getDb().suppliers.find((s) => s.id === p.supplier_id)?.name ?? "-" : null;
+      if (!name) return;
+      const cur = map.get(name) ?? { count: 0, total: 0 };
+      map.set(name, { count: cur.count + 1, total: cur.total + purchaseTotal(p) });
     });
     return [...map.entries()].map(([name, v]) => ({ name, ...v }));
   }, [purchases]);
@@ -140,9 +147,9 @@ export default function LaporanPage() {
             >
               {sales.map((s) => (
                 <tr key={s.id} className="hover:bg-zinc-50/70">
-                  <Td className="font-medium tabular-nums whitespace-nowrap">{s.invoice_number}</Td>
+                  <Td className="font-medium tabular-nums whitespace-nowrap">{s.invoice_number ?? "—"}</Td>
                   <Td className="text-muted whitespace-nowrap">{formatDate(s.transaction_date)}</Td>
-                  <Td className="text-muted whitespace-nowrap">{s.cashier_name}</Td>
+                  <Td className="text-muted whitespace-nowrap">{s.user_name}</Td>
                   <Td className="text-right tabular-nums font-medium">{formatRupiah(s.total)}</Td>
                 </tr>
               ))}
@@ -184,7 +191,7 @@ export default function LaporanPage() {
               {purchases.map((p) => (
                 <tr key={p.id} className="hover:bg-zinc-50/70">
                   <Td className="font-medium tabular-nums whitespace-nowrap">{p.id}</Td>
-                  <Td className="whitespace-nowrap">{p.supplier_name}</Td>
+                  <Td className="whitespace-nowrap">{p.supplier_id ? getDb().suppliers.find((s) => s.id === p.supplier_id)?.name ?? "-" : t.pembelian.noSupplier}</Td>
                   <Td className="text-muted whitespace-nowrap">{formatDate(p.purchase_date)}</Td>
                   <Td className="text-center tabular-nums text-muted">
                     {p.details.reduce((s, d) => s + d.quantity, 0)}
@@ -236,26 +243,26 @@ export default function LaporanPage() {
             <StatCard
               icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l8 4v10l-8 4-8-4V7l8-4z" /></svg>}
               label={t.laporan.stockTotalProducts}
-              value={mockProducts.length}
+              value={db.products.length}
             />
             <StatCard
               icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h10M4 12h16M4 17h10" /></svg>}
               label={t.laporan.stockTotalUnits}
-              value={mockProducts.reduce((s, p) => s + p.stock, 0)}
+              value={db.products.reduce((s, p) => s + p.stock, 0)}
               bgColor="bg-blue-600/10"
               iconColor="text-blue-600"
             />
             <StatCard
               icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6" /></svg>}
               label={t.laporan.stockTotalValue}
-              value={formatRupiah(mockProducts.reduce((s, p) => s + p.stock * p.purchase_price, 0))}
+              value={formatRupiah(db.products.reduce((s, p) => s + p.stock * p.purchase_price, 0))}
               bgColor="bg-amber-600/10"
               iconColor="text-amber-600"
             />
             <StatCard
               icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z" /></svg>}
               label={t.laporan.stockLowCount}
-              value={mockProducts.filter((p) => p.stock <= p.minimum_stock).length}
+              value={db.products.filter((p) => p.stock <= p.minimum_stock).length}
               bgColor="bg-rose-600/10"
               iconColor="text-rose-600"
             />
@@ -272,7 +279,7 @@ export default function LaporanPage() {
                 </>
               }
             >
-              {mockProducts.map((p) => (
+              {db.products.map((p) => (
                 <tr key={p.id} className="hover:bg-zinc-50/70">
                   <Td className="font-medium text-foreground">{p.name}</Td>
                   <Td className={`text-center tabular-nums ${p.stock <= p.minimum_stock ? "text-danger font-semibold" : ""}`}>
@@ -349,10 +356,10 @@ export default function LaporanPage() {
                 </>
               }
             >
-              {mockDebts.map((d) => (
-                <tr key={d.id} className="hover:bg-zinc-50/70">
+              {db.debts.map((d) => (
+                <tr key={d.debt_id} className="hover:bg-zinc-50/70">
                   <Td className="font-medium text-foreground whitespace-nowrap">{d.customer_name}</Td>
-                  <Td className="tabular-nums text-muted whitespace-nowrap">{d.sale_id}</Td>
+                  <Td className="tabular-nums text-muted whitespace-nowrap">{db.sales.find((s) => s.id === d.sale_id)?.invoice_number ?? d.sale_id}</Td>
                   <Td className="text-right tabular-nums">{formatRupiah(d.total_debt)}</Td>
                   <Td className={`text-right tabular-nums font-medium ${d.remaining_debt > 0 ? "text-danger" : "text-success"}`}>
                     {formatRupiah(d.remaining_debt)}
@@ -379,7 +386,7 @@ export default function LaporanPage() {
               </>
             }
           >
-            {mockAdjustments.flatMap((a) =>
+            {db.adjustments.flatMap((a) =>
               a.details.map((d) => (
                 <tr key={`${a.id}-${d.product_id}`} className="hover:bg-zinc-50/70">
                   <Td className="font-medium tabular-nums whitespace-nowrap">{a.id}</Td>

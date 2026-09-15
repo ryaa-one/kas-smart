@@ -2,6 +2,7 @@
 
 // Mock authentication sementara — struktur ready diganti API backend.
 // Ganti isi login() dengan panggilan API nanti; AuthContext tetap terpakai.
+// Data akun ada di lib/mock/users.ts (dipakai juga CRUD Kasir Owner).
 import {
   createContext,
   useContext,
@@ -10,6 +11,8 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { authenticate, type StoreUser } from "@/lib/mock/users";
+import { logActivity } from "@/lib/mock/db";
 
 export type Role = "Owner" | "Kasir";
 
@@ -22,38 +25,24 @@ export interface AuthUser {
   role: Role; // USERS.role
 }
 
-// Akun mock — pengganti tabel USERS saat backend terhubung.
-const MOCK_USERS: (AuthUser & { password: string })[] = [
-  {
-    id: "U-001",
-    name: "Musthofa Arya",
-    username: "admin",
-    password: "admin",
-    phone: "0812-9999-8888",
-    email: "musthofa@kas-smart.id",
-    role: "Owner",
-  },
-  {
-    id: "U-002",
-    name: "Dina Kasir",
-    username: "user",
-    password: "user",
-    phone: "0813-2222-1111",
-    email: "dina@kas-smart.id",
-    role: "Kasir",
-  },
-];
-
 const STORAGE_KEY = "kassmart_session";
 
 interface AuthContextType {
   user: AuthUser | null;
-  login: (username: string, password: string) => AuthUser | null;
+  login: (
+    username: string,
+    password: string
+  ) => { ok: true; user: AuthUser } | { ok: false; reason: "invalid" | "inactive" };
   logout: () => void;
   hydrated: boolean; // false sebelum localStorage selesai dibaca (hindari redirect salah)
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
+
+function toAuthUser(u: StoreUser): AuthUser {
+  const { id, name, username, phone_number, email, role } = u;
+  return { id, name, username, phone: phone_number, email, role };
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -70,25 +59,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setHydrated(true);
   }, []);
 
-  const value: AuthContextType = {
+  const value: AuthContextType = useMemo(
+    () => ({
       user,
       login: (username, password) => {
         // ponytail: mock lookup lokal — ganti POST /api/login saat backend ada.
-        const found = MOCK_USERS.find(
-          (u) => u.username === username.trim() && u.password === password
-        );
-        if (!found) return null;
-        const { password: _pw, ...rest } = found;
-        setUser(rest);
-        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(rest));
-        return rest;
-      },
-      logout: () => {
+        const res = authenticate(username, password);
+        if (!res.ok) return { ok: false, reason: res.reason };
+        const authUser = toAuthUser(res.user);
+        setUser(authUser);
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(authUser));
+        // FR-19: login dicatat ke ACTIVITY_LOGS (store bersama).
+        logActivity({ id: authUser.id, name: authUser.name }, "login", "Login ke sistem");
+        return { ok: true, user: authUser };
+        },
+        logout: () => {
+        if (user) logActivity({ id: user.id, name: user.name }, "logout", "Logout dari sistem");
         setUser(null);
         window.localStorage.removeItem(STORAGE_KEY);
-      },
-      hydrated,
-  };
+        },
+        hydrated,
+        }),
+        [user, hydrated]
+  );
 
   return (
     <AuthContext.Provider value={value}>

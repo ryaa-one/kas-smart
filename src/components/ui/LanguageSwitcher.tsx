@@ -2,37 +2,39 @@
 
 import { useLang, type Lang } from "@/lib/i18n/LanguageContext";
 
+const OPTIONS: { key: Lang; label: string }[] = [
+  { key: "id", label: "ID" },
+  { key: "en", label: "EN" },
+];
+
 export function LanguageSwitcher() {
   const { lang, setLang } = useLang();
-
-  const toggle = () => {
-    const next: Lang = lang === "id" ? "en" : "id";
-    setLang(next);
-  };
+  const activeIndex = OPTIONS.findIndex((o) => o.key === lang);
 
   return (
     <button
-      onClick={toggle}
-      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
-        border border-line text-muted hover:border-primary hover:text-primary
-        transition-colors cursor-pointer"
+      onClick={() => setLang(lang === "id" ? "en" : "id")}
+      className="relative flex h-8 w-[76px] rounded-full bg-primary/10 border border-primary/20 p-1 cursor-pointer select-none"
+      role="switch"
+      aria-checked={lang === "en"}
       aria-label={lang === "id" ? "Switch to English" : "Ganti ke Bahasa Indonesia"}
     >
-      {lang === "id" ? (
-        <>
-          <span className="w-4 h-3 flex items-center justify-center overflow-hidden rounded-[2px] bg-red-600 text-[7px] font-bold text-white leading-none pt-0.5">
-            ID
-          </span>
-          <span>EN</span>
-        </>
-      ) : (
-        <>
-          <span className="w-4 h-3 flex items-center justify-center overflow-hidden rounded-[2px] bg-blue-800 text-[7px] font-bold text-white leading-none pt-0.5">
-            EN
-          </span>
-          <span>ID</span>
-        </>
-      )}
+      {/* sliding knob — proporsional terhadap segmen (50% dikurangi padding track) */}
+      <span
+        aria-hidden
+        className="absolute top-1 bottom-1 left-1 w-[calc(50%-4px)] rounded-full bg-primary transition-transform duration-300 ease-out"
+        style={{ transform: `translateX(${activeIndex * 100}%)` }}
+      />
+      {OPTIONS.map((o) => (
+        <span
+          key={o.key}
+          className={`relative z-10 flex flex-1 items-center justify-center text-[11px] font-semibold tracking-wide transition-colors duration-300 ${
+            o.key === lang ? "text-white" : "text-primary"
+          }`}
+        >
+          {o.label}
+        </span>
+      ))}
     </button>
   );
 }

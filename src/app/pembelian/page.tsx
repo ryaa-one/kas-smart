@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useLang } from "@/lib/i18n/LanguageContext";
 import { useAuth } from "@/lib/auth";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
@@ -11,8 +11,13 @@ import { Select } from "@/components/ui/Select";
 import { Modal } from "@/components/ui/Modal";
 import { Table, Th, Td } from "@/components/ui/Table";
 import { formatDate, formatRupiah } from "@/lib/format";
-import { mockProducts, mockSuppliers } from "@/lib/mock/master";
-import { mockPurchases, purchaseTotal, type Purchase } from "@/lib/mock/owner";
+import {
+  useDb,
+  addPurchase,
+  purchaseTotal,
+  getDb,
+  type Purchase,
+} from "@/lib/mock/db";
 
 interface Line {
   product_id: string;
@@ -20,26 +25,21 @@ interface Line {
   unit_purchase_price: string;
 }
 
-// Form Tambah Pembelian: workflow PRD = pilih supplier, pilih produk,
-// masukkan jumlah + harga beli, simpan.
-function PurchaseForm({
-  onClose,
-  onSubmit,
-}: {
-  onClose: () => void;
-  onSubmit: (supplierId: string, lines: Line[]) => void;
-}) {
+// Form Tambah Pembelian (UC-07): supplier OPSIONAL (ERD supplier_id nullable),
+// pilih produk + jumlah + harga beli, simpan → stok bertambah (addPurchase).
+function PurchaseForm({ onClose }: { onClose: () => void }) {
   const { t } = useLang();
   const { user } = useAuth();
+  const db = useDb();
   const [supplierId, setSupplierId] = useState("");
   const [lines, setLines] = useState<Line[]>([{ product_id: "", quantity: "", unit_purchase_price: "" }]);
-  const [errors, setErrors] = useState<{ supplier?: string; lines?: Record<number, { product?: string; quantity?: string }> }>({});
+  const [errors, setErrors] = useState<{ lines?: Record<number, { product?: string; quantity?: string }> }>({});
 
   const setLine = (i: number, patch: Partial<Line>) =>
     setLines((ls) => ls.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
 
   const pickProduct = (i: number, productId: string) => {
-    const p = mockProducts.find((x) => x.id === productId);
+    const p = db.products.find((x) => x.id === productId);
     setLine(i, {
       product_id: productId,
       unit_purchase_price: p ? String(p.purchase_price) : "",
@@ -52,8 +52,6 @@ function PurchaseForm({
   );
 
   const submit = () => {
-    const e: typeof errors = {};
-    if (!supplierId) e.supplier = t.pembelian.errorSupplierRequired;
     const lineErrors: Record<number, { product?: string; quantity?: string }> = {};
     lines.forEach((l, i) => {
       const le: { product?: string; quantity?: string } = {};
@@ -61,22 +59,31 @@ function PurchaseForm({
       if ((parseInt(l.quantity, 10) || 0) < 1) le.quantity = t.pembelian.errorQuantityMin;
       if (Object.keys(le).length) lineErrors[i] = le;
     });
-    if (Object.keys(lineErrors).length) e.lines = lineErrors;
-    setErrors(e);
-    if (e.supplier || e.lines) return;
-    onSubmit(supplierId, lines);
+    setErrors(Object.keys(lineErrors).length ? { lines: lineErrors } : {});
+    if (Object.keys(lineErrors).length) return;
+
+    if (!user) return;
+    addPurchase(
+      { id: user.id, name: user.name },
+      supplierId || null, // supplier opsional → null
+      lines.map((l) => ({
+        product_id: l.product_id,
+        quantity: parseInt(l.quantity, 10) || 0,
+        unit_purchase_price: parseInt(l.unit_purchase_price, 10) || 0,
+      }))
+    );
+    onClose();
   };
 
   return (
     <div className="space-y-4">
       <Select
-        label={t.pembelian.fieldSupplier}
+        label={`${t.pembelian.fieldSupplier} ${t.pembelian.supplierOptional}`}
         value={supplierId}
         onChange={(e) => setSupplierId(e.target.value)}
-        error={errors.supplier}
       >
-        <option value="">{t.pembelian.selectSupplier}</option>
-        {mockSuppliers.map((s) => (
+        <option value="">{t.pembelian.noSupplier}</option>
+        {db.suppliers.map((s) => (
           <option key={s.id} value={s.id}>{s.name}</option>
         ))}
       </Select>
@@ -91,7 +98,7 @@ function PurchaseForm({
               error={errors.lines?.[i]?.product}
             >
               <option value="">{t.pembelian.selectProduct}</option>
-              {mockProducts.map((p) => (
+              {db.products.map((p) => (
                 <option key={p.id} value={p.id}>{p.name}</option>
               ))}
             </Select>
@@ -150,36 +157,16 @@ function PurchaseForm({
 
 export default function PembelianPage() {
   const { t } = useLang();
-  const { user } = useAuth();
+  const db = useDb(); // PURCHASES dari store bersama + stok update
 
-  const [purchases, setPurchases] = useState<Purchase[]>(mockPurchases);
   const [detail, setDetail] = useState<Purchase | null>(null);
   const [addOpen, setAddOpen] = useState(false);
 
-  const supplierNames = useMemo(
-    () => Object.fromEntries(mockSuppliers.map((s) => [s.id, s.name])),
-    []
-  );
+  const supplierName = (id: string | null) =>
+    id ? getDb().suppliers.find((s) => s.id === id)?.name ?? "-" : t.pembelian.noSupplier;
 
-  const handleAdd = (supplierId: string, lines: Line[]) => {
-    setPurchases((ps) => [
-      {
-        id: `PO-${String(ps.length + 1).padStart(3, "0")}`,
-        supplier_id: supplierId,
-        supplier_name: supplierNames[supplierId] ?? "-",
-        user_name: user?.name ?? "-",
-        purchase_date: new Date().toISOString().slice(0, 10),
-        details: lines.map((l) => ({
-          product_id: l.product_id,
-          product_name: mockProducts.find((p) => p.id === l.product_id)?.name ?? "-",
-          quantity: parseInt(l.quantity, 10) || 0,
-          unit_purchase_price: parseInt(l.unit_purchase_price, 10) || 0,
-        })),
-      },
-      ...ps,
-    ]);
-    setAddOpen(false);
-  };
+  // Tampilkan pembelian terbaru lebih dulu.
+  const rows = [...db.purchases].reverse();
 
   return (
     <DashboardLayout title={t.pembelian.title} subtitle={t.pembelian.subtitle}>
@@ -207,10 +194,10 @@ export default function PembelianPage() {
             </>
           }
         >
-          {purchases.map((p) => (
+          {rows.map((p) => (
             <tr key={p.id} className="hover:bg-zinc-50/70">
               <Td className="font-medium tabular-nums whitespace-nowrap">{p.id}</Td>
-              <Td className="text-foreground whitespace-nowrap">{p.supplier_name}</Td>
+              <Td className="text-foreground whitespace-nowrap">{supplierName(p.supplier_id)}</Td>
               <Td className="text-muted whitespace-nowrap">{formatDate(p.purchase_date)}</Td>
               <Td className="text-center tabular-nums text-muted">
                 {p.details.reduce((s, d) => s + d.quantity, 0)}
@@ -231,7 +218,7 @@ export default function PembelianPage() {
 
       {/* Modal Tambah Pembelian */}
       <Modal open={addOpen} onClose={() => setAddOpen(false)} title={t.pembelian.addTitle} wide>
-        <PurchaseForm onClose={() => setAddOpen(false)} onSubmit={handleAdd} />
+        {addOpen && <PurchaseForm onClose={() => setAddOpen(false)} />}
       </Modal>
 
       {/* Modal Detail Pembelian */}
@@ -250,7 +237,7 @@ export default function PembelianPage() {
             <div className="grid grid-cols-2 gap-2 text-sm">
               <div>
                 <p className="text-muted text-xs">{t.pembelian.tableSupplier}</p>
-                <p className="font-medium">{detail.supplier_name}</p>
+                <p className="font-medium">{supplierName(detail.supplier_id)}</p>
               </div>
               <div>
                 <p className="text-muted text-xs">{t.pembelian.tableDate}</p>

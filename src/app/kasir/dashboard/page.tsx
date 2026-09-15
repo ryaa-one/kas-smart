@@ -7,7 +7,7 @@ import { Card } from "@/components/ui/Card";
 import { StatCard } from "@/components/ui/StatCard";
 import { useAuth } from "@/lib/auth";
 import { formatRupiah, formatDateTime } from "@/lib/format";
-import { mockSales, mockActivityLogs } from "@/lib/mock/owner";
+import { useDb, isSaleCompleted, activityLabelAction } from "@/lib/mock/db";
 
 // Dashboard Kasir (PRD FR-02): Penjualan Hari Ini, Jumlah Transaksi Hari Ini,
 // Shortcut Mulai Transaksi, Aktivitas Hari Ini.
@@ -15,42 +15,29 @@ import { mockSales, mockActivityLogs } from "@/lib/mock/owner";
 export default function KasirDashboardPage() {
   const { t } = useLang();
   const { user } = useAuth();
+  const db = useDb(); // store bersama: transaksi & log milik kasir login
 
-  const name = user?.name ?? "";
-
-  const { salesToday, countToday, latestDate } = useMemo(() => {
-    const mine = mockSales.filter(
-      (s) => s.cashier_name === name && s.status !== "cancelled"
-    );
-    const latestDate = mine.reduce(
-      (max, s) => (s.transaction_date > max ? s.transaction_date : max),
-      ""
-    );
-    const todaySales = mine.filter(
-      (s) => s.transaction_date.slice(0, 10) === latestDate.slice(0, 10)
-    );
-    return {
-      salesToday: todaySales.reduce((sum, s) => sum + s.total, 0),
-      countToday: todaySales.length,
-      latestDate,
-    };
-  }, [name]);
-
-  const activities = useMemo(() => {
-    const day = latestDate.slice(0, 10);
-    const mine = mockActivityLogs.filter(
-      (a) => a.user_name === name && a.created_at.slice(0, 10) === day
-    );
-    // ponytail: fallback ke aktivitas terakhir agar demo tetap ada isinya.
-    return mine.length
-      ? mine
-      : mockActivityLogs.filter((a) => a.user_name === name).slice(0, 4);
-  }, [name, latestDate]);
-
-  const activityLabel = (action: string) => {
-    const key = action as keyof typeof t.activity;
-    return (t.activity as Record<string, string>)[key] ?? action;
+  // PRD FR-02 (Kasir): statistik hanya dari SALES_TRANSACTIONS milik user login
+  // (user_id session — bukan nama hardcoded, H-3).
+  const { salesToday, countToday } = useMemo(() => {
+  const mine = db.sales.filter((s) => s.user_id === user?.id && isSaleCompleted(s));
+  const latestDate = mine.reduce(
+  (max, s) => (s.transaction_date > max ? s.transaction_date : max),
+  ""
+  );
+  const todaySales = mine.filter(
+  (s) => s.transaction_date.slice(0, 10) === latestDate.slice(0, 10)
+  );
+  return {
+  salesToday: todaySales.reduce((sum, s) => sum + s.total, 0),
+  countToday: todaySales.length,
   };
+  }, [db.sales, user]);
+
+  const activities = useMemo(
+  () => db.logs.filter((l) => l.user_id === user?.id).slice(0, 8),
+  [db.logs, user]
+  );
 
   return (
     <DashboardLayout title={t.kasirDashboard.title} subtitle={t.kasirDashboard.subtitle}>
@@ -119,7 +106,7 @@ export default function KasirDashboardPage() {
               >
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-foreground">
-                    {activityLabel(a.action)}
+                    {activityLabelAction(db, a.action)}
                   </p>
                   <p className="text-xs text-muted truncate">{a.description}</p>
                 </div>

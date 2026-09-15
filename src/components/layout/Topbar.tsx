@@ -10,7 +10,7 @@ export function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
 
   return (
     <header className="sticky top-0 z-20 bg-white/90 backdrop-blur border-b border-line">
-      <div className="flex items-center gap-3 px-4 sm:px-6 py-3.5">
+      <div className="flex items-center gap-3 px-4 sm:px-6 h-[77px]">
         <button
           className="lg:hidden text-muted hover:text-foreground"
           onClick={onMenuClick}
@@ -32,7 +32,7 @@ export function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
           />
         </div>
 
-        <div className="flex-1 sm:hidden" />
+        <div className="flex-1" />
 
         <div className="hidden md:flex items-center gap-2 text-sm text-muted px-3 py-1.5 rounded-lg border border-line">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">

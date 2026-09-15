@@ -8,6 +8,8 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Badge } from "@/components/ui/Badge";
 import { useAuth } from "@/lib/auth";
+import { updateUser, isUsernameTaken, isEmailTaken } from "@/lib/mock/users";
+import { logActivity } from "@/lib/mock/db";
 
 interface ProfileForm {
   name: string;
@@ -60,10 +62,25 @@ export default function ProfilSayaPage() {
     if (form.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) err.email = t.profil.errorEmailInvalid;
     if (form.password && form.password.length < 8) err.password = t.profil.errorPasswordMin;
     if (form.password && form.password !== form.confirm) err.confirm = t.profil.errorPasswordMismatch;
+    // Username tidak boleh milik akun lain (store USERS).
+    if (user && form.username.trim() !== user.username && isUsernameTaken(form.username.trim()))
+    err.username = t.kasirAkun.errorUsernameTaken;
+    // M-11: email juga unik lintas USERS (milik sendiri saat edit bukan duplikat).
+    if (user && form.email.trim() && isEmailTaken(form.email.trim(), user.id))
+    err.email = t.kasirAkun.errorEmailTaken;
     setErrors(err);
-    if (Object.keys(err).length) return;
+    if (Object.keys(err).length || !user) return;
+
+    // Simpan ke USERS (localStorage) + ACTIVITY_LOGS — efek terasa setelah logout/login.
+    updateUser(user.id, {
+    name: form.name.trim(),
+    username: form.username.trim(),
+    phone_number: form.phone.trim(),
+    email: form.email.trim() || undefined,
+    ...(form.password ? { password: form.password } : {}),
+    });
+    logActivity({ id: user.id, name: form.name.trim() || user.name }, "profileChange", "Perbarui profil saya");
     setSaved(true);
-    // ponytail: persist lokal saja — simpan ke USERS saat backend terhubung.
     setTimeout(() => setSaved(false), 3000);
   };
 

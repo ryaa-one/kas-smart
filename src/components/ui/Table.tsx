@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode } from "react";
+import { type ReactNode, Children } from "react";
 
 interface TableProps {
   head: ReactNode;
@@ -11,6 +11,7 @@ interface TableProps {
 // Tabel bergaya Card: header zinc-50, baris hover, teks truncation di sel.
 // Bungkus Card padding=false lalu px-4 sm:px-5 di dalamnya agar scroll-x mulus.
 export function Table({ head, children, empty }: TableProps) {
+  const hasRows = Children.count(children) > 0;
   return (
     <>
       <div className="overflow-x-auto -mx-4 sm:-mx-5">
@@ -23,7 +24,7 @@ export function Table({ head, children, empty }: TableProps) {
           <tbody className="divide-y divide-line">{children}</tbody>
         </table>
       </div>
-      {empty && <p className="text-center text-sm text-muted py-10">{empty}</p>}
+      {empty && !hasRows && <p className="text-center text-sm text-muted py-10">{empty}</p>}
     </>
   );
 }

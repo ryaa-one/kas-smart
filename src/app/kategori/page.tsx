@@ -9,28 +9,38 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
 import { Table, Th, Td } from "@/components/ui/Table";
-import { mockCategories, type Category } from "@/lib/mock/master";
+import {
+  useDb,
+  addCategory,
+  updateCategory,
+  deleteCategory,
+  productsUsingCategory,
+  logActivity,
+} from "@/lib/mock/db";
 
 export default function KategoriPage() {
   const { t } = useLang();
   const { user } = useAuth();
+  const db = useDb(); // store bersama: CATEGORIES + hitungan pemakaian dari PRODUCTS
 
-  const [categories, setCategories] = useState<Category[]>(mockCategories);
   const [modalOpen, setModalOpen] = useState(false);
-  const [editing, setEditing] = useState<Category | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [error, setError] = useState("");
+  const [blockMsg, setBlockMsg] = useState("");
+
+  const actor = user ? { id: user.id, name: user.name } : null;
 
   const openAdd = () => {
-    setEditing(null);
+    setEditingId(null);
     setName("");
     setError("");
     setModalOpen(true);
   };
 
-  const openEdit = (c: Category) => {
-    setEditing(c);
-    setName(c.name);
+  const openEdit = (id: string, current: string) => {
+    setEditingId(id);
+    setName(current);
     setError("");
     setModalOpen(true);
   };
@@ -40,22 +50,26 @@ export default function KategoriPage() {
       setError(t.kategori.errorNameRequired);
       return;
     }
-    if (editing) {
-      setCategories((cs) =>
-        cs.map((c) => (c.id === editing.id ? { ...c, name: name.trim() } : c))
-      );
+    if (editingId) {
+      updateCategory(editingId, name.trim());
+      if (actor) logActivity(actor, "categoryEdit", `Ubah kategori ${name.trim()}`);
     } else {
-      setCategories((cs) => [
-        ...cs,
-        { id: `CAT-${String(cs.length + 1).padStart(2, "0")}`, name: name.trim(), product_count: 0 },
-      ]);
+      addCategory(name.trim());
+      if (actor) logActivity(actor, "categoryAdd", `Tambah kategori ${name.trim()}`);
     }
     setModalOpen(false);
   };
 
-  const removeCategory = (c: Category) => {
+  // H-1: kategori yang masih dipakai PRODUCTS tidak boleh dihapus.
+  const removeCategoryGuarded = (id: string, catName: string) => {
+    const used = productsUsingCategory(id);
+    if (used > 0) {
+      setBlockMsg(t.kategori.errorDeleteInUse.replace("{n}", String(used)));
+      return;
+    }
     if (!window.confirm(t.kategori.deleteConfirm)) return;
-    setCategories((cs) => cs.filter((x) => x.id !== c.id));
+    deleteCategory(id);
+    if (actor) logActivity(actor, "categoryDelete", `Hapus kategori ${catName}`);
   };
 
   const actionBtn = "p-1.5 rounded-md hover:bg-zinc-100 transition-colors";
@@ -72,6 +86,22 @@ export default function KategoriPage() {
           </Button>
         </div>
 
+        {blockMsg && (
+          <div
+            role="alert"
+            className="mb-4 flex items-start justify-between gap-3 rounded-lg bg-danger/10 border border-danger/30 text-danger px-4 py-3 text-sm font-medium"
+          >
+            <span>{blockMsg}</span>
+            <button
+              type="button"
+              onClick={() => setBlockMsg("")}
+              className="shrink-0 text-xs underline underline-offset-2"
+            >
+              {t.common.close}
+            </button>
+          </div>
+        )}
+
         <Table
           empty={t.kategori.empty}
           head={
@@ -82,18 +112,20 @@ export default function KategoriPage() {
             </>
           }
         >
-          {categories.map((c) => (
+          {db.categories.map((c) => (
             <tr key={c.id} className="hover:bg-zinc-50/70">
               <Td className="font-medium text-foreground">{c.name}</Td>
-              <Td className="text-center tabular-nums text-muted">{c.product_count}</Td>
+              <Td className="text-center tabular-nums text-muted">
+                {db.products.filter((p) => p.category_id === c.id).length}
+              </Td>
               <Td>
                 <div className="flex items-center justify-end gap-1">
-                  <button type="button" onClick={() => openEdit(c)} className={actionBtn} title={t.common.edit} aria-label={t.common.edit}>
+                  <button type="button" onClick={() => openEdit(c.id, c.name)} className={actionBtn} title={t.common.edit} aria-label={t.common.edit}>
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="text-muted">
                       <path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4L16.5 3.5z" />
                     </svg>
                   </button>
-                  <button type="button" onClick={() => removeCategory(c)} className={actionBtn} title={t.common.delete} aria-label={t.common.delete}>
+                  <button type="button" onClick={() => removeCategoryGuarded(c.id, c.name)} className={actionBtn} title={t.common.delete} aria-label={t.common.delete}>
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="text-muted hover:text-danger">
                       <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
                     </svg>
@@ -108,7 +140,7 @@ export default function KategoriPage() {
       <Modal
         open={modalOpen}
         onClose={() => setModalOpen(false)}
-        title={editing ? t.kategori.editTitle : t.kategori.addTitle}
+        title={editingId ? t.kategori.editTitle : t.kategori.addTitle}
         footer={
           <>
             <Button variant="secondary" onClick={() => setModalOpen(false)}>

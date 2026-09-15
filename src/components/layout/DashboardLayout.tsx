@@ -16,7 +16,8 @@ interface Props {
 // Layout halaman dalam (sidebar+topbar). Punya guard sendiri:
 // - belum login -> redirect /login
 // - role tidak sesuai area -> tampil 403 (Kasir tidak bisa buka halaman Owner via URL)
-// /kasir dan /kasir/* bisa diakses Owner maupun Kasir (PRD: Owner boleh transaksi).
+// /kasir/* & /transaksi bisa diakses Owner maupun Kasir (PRD: Owner boleh transaksi).
+// /kasir (persis) = CRUD akun Kasir milik Owner — Kasir ditolak 403.
 export function DashboardLayout({ children, title, subtitle }: Props) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { user, hydrated } = useAuth();
@@ -35,8 +36,9 @@ export function DashboardLayout({ children, title, subtitle }: Props) {
     );
   }
 
-  const isKasirArea = pathname === "/kasir" || pathname.startsWith("/kasir/");
-  const allowed = isKasirArea ? true : user.role === "Owner";
+  const isKasirCrud = pathname === "/kasir";
+  const isSharedArea = pathname.startsWith("/kasir/") || pathname === "/transaksi";
+  const allowed = isKasirCrud ? user.role === "Owner" : isSharedArea ? true : user.role === "Owner";
 
   if (!allowed) {
     return (

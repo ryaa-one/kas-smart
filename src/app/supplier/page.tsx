@@ -10,7 +10,14 @@ import { Input } from "@/components/ui/Input";
 import { Textarea } from "@/components/ui/Textarea";
 import { Modal } from "@/components/ui/Modal";
 import { Table, Th, Td } from "@/components/ui/Table";
-import { mockSuppliers, type Supplier } from "@/lib/mock/master";
+import {
+  useDb,
+  addSupplier,
+  updateSupplier,
+  deleteSupplier,
+  purchasesUsingSupplier,
+  logActivity,
+} from "@/lib/mock/db";
 
 interface FormState {
   name: string;
@@ -23,22 +30,25 @@ const emptyForm: FormState = { name: "", phone: "", address: "" };
 export default function SupplierPage() {
   const { t } = useLang();
   const { user } = useAuth();
+  const db = useDb(); // store bersama: SUPPLIERS + pemakaian dari PURCHASES
 
-  const [suppliers, setSuppliers] = useState<Supplier[]>(mockSuppliers);
   const [modalOpen, setModalOpen] = useState(false);
-  const [editing, setEditing] = useState<Supplier | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm);
   const [errors, setErrors] = useState<Partial<FormState>>({});
+  const [blockMsg, setBlockMsg] = useState("");
+
+  const actor = user ? { id: user.id, name: user.name } : null;
 
   const openAdd = () => {
-    setEditing(null);
+    setEditingId(null);
     setForm(emptyForm);
     setErrors({});
     setModalOpen(true);
   };
 
-  const openEdit = (s: Supplier) => {
-    setEditing(s);
+  const openEdit = (s: { id: string; name: string; phone: string; address: string }) => {
+    setEditingId(s.id);
     setForm({ name: s.name, phone: s.phone, address: s.address });
     setErrors({});
     setModalOpen(true);
@@ -50,27 +60,26 @@ export default function SupplierPage() {
     setErrors(e);
     if (Object.keys(e).length) return;
 
-    if (editing) {
-      setSuppliers((ss) =>
-        ss.map((s) => (s.id === editing.id ? { ...s, ...form, name: form.name.trim() } : s))
-      );
+    if (editingId) {
+      updateSupplier(editingId, { ...form, name: form.name.trim() });
+      if (actor) logActivity(actor, "supplierEdit", `Ubah supplier ${form.name.trim()}`);
     } else {
-      setSuppliers((ss) => [
-        ...ss,
-        {
-          id: `SUP-${String(ss.length + 1).padStart(2, "0")}`,
-          ...form,
-          name: form.name.trim(),
-          product_count: 0,
-        },
-      ]);
+      addSupplier({ ...form, name: form.name.trim() });
+      if (actor) logActivity(actor, "supplierAdd", `Tambah supplier ${form.name.trim()}`);
     }
     setModalOpen(false);
   };
 
-  const removeSupplier = (s: Supplier) => {
+  // H-1: supplier yang masih dipakai PURCHASES tidak boleh dihapus.
+  const removeSupplierGuarded = (id: string, supName: string) => {
+    const used = purchasesUsingSupplier(id);
+    if (used > 0) {
+      setBlockMsg(t.supplier.errorDeleteInUse.replace("{n}", String(used)));
+      return;
+    }
     if (!window.confirm(t.supplier.deleteConfirm)) return;
-    setSuppliers((ss) => ss.filter((x) => x.id !== s.id));
+    deleteSupplier(id);
+    if (actor) logActivity(actor, "supplierDelete", `Hapus supplier ${supName}`);
   };
 
   const actionBtn = "p-1.5 rounded-md hover:bg-zinc-100 transition-colors";
@@ -87,6 +96,22 @@ export default function SupplierPage() {
           </Button>
         </div>
 
+        {blockMsg && (
+          <div
+            role="alert"
+            className="mb-4 flex items-start justify-between gap-3 rounded-lg bg-danger/10 border border-danger/30 text-danger px-4 py-3 text-sm font-medium"
+          >
+            <span>{blockMsg}</span>
+            <button
+              type="button"
+              onClick={() => setBlockMsg("")}
+              className="shrink-0 text-xs underline underline-offset-2"
+            >
+              {t.common.close}
+            </button>
+          </div>
+        )}
+
         <Table
           empty={t.supplier.empty}
           head={
@@ -94,17 +119,19 @@ export default function SupplierPage() {
               <Th>{t.supplier.tableSupplier}</Th>
               <Th>{t.supplier.tablePhone}</Th>
               <Th>{t.supplier.tableAddress}</Th>
-              <Th className="text-center">{t.supplier.tableProductCount}</Th>
+              <Th className="text-center">{t.supplier.tablePurchaseCount}</Th>
               <Th className="text-right">{t.common.actions}</Th>
             </>
           }
         >
-          {suppliers.map((s) => (
+          {db.suppliers.map((s) => (
             <tr key={s.id} className="hover:bg-zinc-50/70">
               <Td className="font-medium text-foreground whitespace-nowrap">{s.name}</Td>
               <Td className="text-muted tabular-nums whitespace-nowrap">{s.phone}</Td>
               <Td className="text-muted max-w-xs truncate">{s.address}</Td>
-              <Td className="text-center tabular-nums text-muted">{s.product_count}</Td>
+              <Td className="text-center tabular-nums text-muted">
+                {db.purchases.filter((p) => p.supplier_id === s.id).length}
+              </Td>
               <Td>
                 <div className="flex items-center justify-end gap-1">
                   <button type="button" onClick={() => openEdit(s)} className={actionBtn} title={t.common.edit} aria-label={t.common.edit}>
@@ -112,7 +139,7 @@ export default function SupplierPage() {
                       <path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4L16.5 3.5z" />
                     </svg>
                   </button>
-                  <button type="button" onClick={() => removeSupplier(s)} className={actionBtn} title={t.common.delete} aria-label={t.common.delete}>
+                  <button type="button" onClick={() => removeSupplierGuarded(s.id, s.name)} className={actionBtn} title={t.common.delete} aria-label={t.common.delete}>
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="text-muted hover:text-danger">
                       <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
                     </svg>
@@ -127,7 +154,7 @@ export default function SupplierPage() {
       <Modal
         open={modalOpen}
         onClose={() => setModalOpen(false)}
-        title={editing ? t.supplier.editTitle : t.supplier.addTitle}
+        title={editingId ? t.supplier.editTitle : t.supplier.addTitle}
         footer={
           <>
             <Button variant="secondary" onClick={() => setModalOpen(false)}>

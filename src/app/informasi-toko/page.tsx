@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLang } from "@/lib/i18n/LanguageContext";
 import { useAuth } from "@/lib/auth";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
@@ -9,15 +9,18 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Textarea } from "@/components/ui/Textarea";
 import { formatRupiah } from "@/lib/format";
-import { mockStoreSettings, type StoreSettings } from "@/lib/mock/owner";
+import { useDb, saveSettings, type StoreSettings } from "@/lib/mock/db";
 
 // Workflow Informasi Toko (PRD): nama toko, logo, alamat, telepon,
 // footer struk, QRIS toko. QRIS = gambar statis unggahan Owner (catatan PRD #5).
 export default function InformasiTokoPage() {
   const { t } = useLang();
   const { user } = useAuth();
+  const db = useDb(); // STORE_SETTINGS dari store bersama (H-7)
 
-  const [form, setForm] = useState<StoreSettings>(mockStoreSettings);
+  const [form, setForm] = useState<StoreSettings>(db.settings);
+  // Sinkron ulang sekali saat store terhidrasi dari localStorage.
+  useEffect(() => setForm(db.settings), [db.settings]);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
 
@@ -28,8 +31,8 @@ export default function InformasiTokoPage() {
       return;
     }
     setError("");
+    if (user) saveSettings({ id: user.id, name: user.name }, form); // store + ACTIVITY_LOGS
     setSaved(true);
-    // ponytail: persist lokal saja — simpan ke STORE_SETTINGS saat backend terhubung.
     setTimeout(() => setSaved(false), 3000);
   };
 
