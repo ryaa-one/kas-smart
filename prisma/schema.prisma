@@ -1,7 +1,13 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
+// KasSmart — Prisma schema
+// Sumber kebenaran: ERD_KasSmart_PJBL.drawio (relational + Data Dictionary),
+// diverifikasi terhadap ERD_KasSmart_Chen.drawio dan 5 kontrak database final:
+//   K1: nama field kembalian ikut ERD = change_amount
+//   K2: DEBT_RECORDS.debt_id PK; DEBT_PAYMENTS.payment_id PK + FK debt_id
+//   K3: USERS.email UNIQUE; email kosong disimpan sebagai NULL (multi-NULL ok)
+//   K4: SALES_TRANSACTIONS.invoice_number NULL s.d. finalisasi; UNIQUE
+//   K5: DEBT_RECORDS.sale_id FK + UNIQUE + NOT NULL (SALES 1 : 0..1 DEBT_RECORDS)
+// Tidak ada relasi SUPPLIERS -> PRODUCTS (supplier hanya ke PURCHASES).
+// Hanya `npx prisma validate` yang dijalankan; tidak ada db push/migration baru.
 
 generator client {
   provider = "prisma-client"
@@ -10,4 +16,276 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+}
+
+// ---------- Enums (label sesuai dokumen) ----------
+
+enum UserRole {
+  Owner
+  Kasir
+}
+
+enum UserStatus {
+  aktif
+  nonaktif
+}
+
+enum SaleStatus {
+  DRAFT                @map("Draft")
+  MENUNGGU_PEMBAYARAN  @map("Menunggu Pembayaran")
+  LUNAS                @map("Lunas")
+  HUTANG               @map("Hutang")
+  DIBATALKAN           @map("Dibatalkan")
+}
+
+enum PaymentMethod {
+  cash
+  qris
+  debt
+}
+
+enum DebtStatus {
+  Unpaid
+  Partial
+  Paid
+}
+
+// ---------- 1. users ----------
+
+model User {
+  id           String     @id @default(cuid())
+  name         String
+  username     String     @unique
+  password     String
+  phone_number String
+  email        String?    @unique // K3: kosong = NULL, boleh lebih dari satu
+  role         UserRole
+  status       UserStatus @default(aktif)
+
+  purchases           Purchase[]
+  sales               SalesTransaction[]
+  debtPayments        DebtPayment[]
+  stockAdjustments    StockAdjustment[]
+  activityLogs        ActivityLog[]
+
+  @@map("users")
+}
+
+// ---------- 2. store_settings ----------
+
+model StoreSetting {
+  id           String @id @default(cuid())
+  store_name   String
+  logo         String
+  address      String
+  phone        String
+  receipt_info String
+  qris_image   String // QRIS statis toko; pembayaran manual tanpa gateway
+
+  @@map("store_settings")
+}
+
+// ---------- 3. categories ----------
+
+model Category {
+  id       String    @id @default(cuid())
+  name     String
+  products Product[] // 1 : N categorizes
+
+  @@map("categories")
+}
+
+// ---------- 4. suppliers ----------
+
+model Supplier {
+  id        String     @id @default(cuid())
+  name      String
+  phone     String
+  address   String
+  purchases Purchase[] // 1 : N supplies; tanpa relasi langsung ke entitas barang
+
+  @@map("suppliers")
+}
+
+// ---------- 5. products ----------
+
+model Product {
+  id              String    @id @default(cuid())
+  category_id     String // FK NOT NULL (ERD: tanpa tanda NULLABLE)
+  barcode         String?   @unique // boleh NULL; kalau diisi harus UNIQUE
+  name            String
+  purchase_price  Int
+  selling_price   Int
+  stock           Int // stok hanya disimpan di tabel ini
+  minimum_stock   Int
+  is_active       Boolean   @default(true)
+
+  category               Category                @relation(fields: [category_id], references: [id])
+  purchaseDetails        PurchaseDetail[] // 1 : N purchased as
+  saleDetails            SaleDetail[] // 1 : N sold as
+  stockAdjustmentDetails StockAdjustmentDetail[] // 1 : N adjusted
+
+  @@map("products")
+}
+
+// ---------- 6. customers ----------
+
+model Customer {
+  id      String             @id @default(cuid())
+  name    String
+  phone   String
+  address String
+
+  sales       SalesTransaction[] // 1 : N makes (optional)
+  debtRecords DebtRecord[] // 1 : N owes
+
+  @@map("customers")
+}
+
+// ---------- 7. purchases ----------
+
+model Purchase {
+  id            String   @id @default(cuid())
+  supplier_id   String? // FK/NULLABLE (ERD)
+  user_id       String // FK NOT NULL
+  purchase_date DateTime @default(now())
+
+  supplier Supplier?       @relation(fields: [supplier_id], references: [id])
+  user     User            @relation(fields: [user_id], references: [id])
+  details  PurchaseDetail[] // 1 : N contains
+
+  @@map("purchases")
+}
+
+// ---------- 8. purchase_details ----------
+
+model PurchaseDetail {
+  id                  String @id @default(cuid())
+  purchase_id         String // FK
+  product_id          String // FK
+  quantity            Int
+  unit_purchase_price Int // harga historis saat pembelian
+
+  purchase Purchase @relation(fields: [purchase_id], references: [id])
+  product  Product  @relation(fields: [product_id], references: [id])
+
+  @@map("purchase_details")
+}
+
+// ---------- 9. sales_transactions ----------
+
+model SalesTransaction {
+  sale_id          String       @id @default(cuid())
+  user_id          String // FK NOT NULL
+  customer_id      String? // FK/NULLABLE — wajib hanya untuk Hutang (di level aplikasi)
+  invoice_number   String?      @unique // K4: NULL s.d. finalisasi
+  transaction_date DateTime     @default(now())
+  payment_method   PaymentMethod
+  status           SaleStatus   @default(DRAFT)
+  total            Int
+  amount_paid      Int?
+  change_amount    Int? // K1: nama field sesuai ERD/Data Dictionary
+  created_at       DateTime     @default(now()) // waktu dibuat (Draft)
+  paid_at          DateTime? // waktu dinyatakan lunas; nullable
+
+  user        User           @relation(fields: [user_id], references: [id])
+  customer    Customer?      @relation(fields: [customer_id], references: [id])
+  details     SaleDetail[] // 1 : N contains
+  debtRecord  DebtRecord? // 1 : 0..1 creates (K5)
+
+  @@map("sales_transactions")
+}
+
+// ---------- 10. sale_details ----------
+
+model SaleDetail {
+  id                 String @id @default(cuid())
+  sale_id            String // FK
+  product_id         String // FK
+  quantity           Int
+  unit_selling_price Int // harga historis saat transaksi
+
+  sale    SalesTransaction @relation(fields: [sale_id], references: [sale_id])
+  product Product            @relation(fields: [product_id], references: [id])
+
+  @@map("sale_details")
+}
+
+// ---------- 11. debt_records ----------
+
+model DebtRecord {
+  debt_id        String     @id @default(cuid()) // K2: PK = debt_id
+  sale_id        String     @unique // K5: FK + UNIQUE + NOT NULL (1 : 0..1 dengan transaksi)
+  customer_id    String // FK
+  total_debt     Int
+  remaining_debt Int // sisa hutang
+  status         DebtStatus @default(Unpaid)
+  created_at     DateTime   @default(now())
+  updated_at     DateTime   @updatedAt
+
+  sale     SalesTransaction @relation(fields: [sale_id], references: [sale_id])
+  customer Customer          @relation(fields: [customer_id], references: [id])
+  payments DebtPayment[] // 1 : N paid by
+
+  @@map("debt_records")
+}
+
+// ---------- 12. debt_payments ----------
+
+model DebtPayment {
+  payment_id    String   @id @default(cuid()) // K2: PK = payment_id
+  debt_id       String // FK -> DEBT_RECORDS.debt_id
+  user_id       String // FK pencatat
+  payment_date  DateTime @default(now())
+  amount        Int
+  note          String
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  debt DebtRecord @relation(fields: [debt_id], references: [debt_id])
+  user User       @relation(fields: [user_id], references: [id])
+
+  @@map("debt_payments")
+}
+
+// ---------- 13. stock_adjustments ----------
+
+model StockAdjustment {
+  id               String   @id @default(cuid())
+  user_id          String // FK
+  adjustment_date  DateTime @default(now())
+  reason           String
+
+  user    User                    @relation(fields: [user_id], references: [id])
+  details StockAdjustmentDetail[] // 1 : N contains
+
+  @@map("stock_adjustments")
+}
+
+// ---------- 14. stock_adjustment_details ----------
+
+model StockAdjustmentDetail {
+  id               String @id @default(cuid())
+  adjustment_id    String // FK
+  product_id       String // FK
+  quantity_change  Int // SELISIH, bukan stok akhir
+
+  adjustment StockAdjustment @relation(fields: [adjustment_id], references: [id])
+  product    Product          @relation(fields: [product_id], references: [id])
+
+  @@map("stock_adjustment_details")
+}
+
+// ---------- 15. activity_logs ----------
+
+model ActivityLog {
+  id          String   @id @default(cuid())
+  user_id     String // FK
+  action      String
+  description String
+  created_at  DateTime @default(now())
+
+  user User @relation(fields: [user_id], references: [id])
+
+  @@map("activity_logs")
 }

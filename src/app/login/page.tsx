@@ -23,7 +23,7 @@ export default function LoginPage() {
     }
   }, [hydrated, user]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const newErrors: typeof errors = {};
 
@@ -35,16 +35,21 @@ export default function LoginPage() {
 
     setLoading(true);
 
-    // Mock auth (lib/auth.tsx) — ganti dengan API login saat backend terhubung.
-    setTimeout(() => {
-      const res = login(username, password);
-      setLoading(false);
-      if (!res.ok) {
-        setErrors({ general: res.reason === "inactive" ? t.login.errorInactive : t.login.errorInvalid });
-        return;
-      }
-      window.location.href = res.user.role === "Kasir" ? "/kasir/dashboard" : "/dashboard";
-    }, 400);
+    // POST /api/auth/login — verifikasi password & sesi cookie di server.
+    const res = await login(username, password);
+    setLoading(false);
+    if (!res.ok) {
+      setErrors({
+        general:
+          res.reason === "inactive"
+            ? t.login.errorInactive
+            : res.reason === "network"
+              ? t.common.loading // placeholder singkat: jaringan bermasalah
+              : t.login.errorInvalid,
+      });
+      return;
+    }
+    window.location.href = res.user.role === "Kasir" ? "/kasir/dashboard" : "/dashboard";
   };
 
   return (

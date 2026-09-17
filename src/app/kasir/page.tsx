@@ -1,8 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+// UC-21 Kelola Data Kasir (Owner only) — SUMBER DATA: database via API.
+// GET /api/kasir | POST /api/kasir | PATCH /api/kasir/:id
+// Tidak ada fallback mock: bila API gagal, tampilkan error (data frontend
+// tidak boleh menyimpang dari database). Tanpa hapus akun — nonaktif menggantikan hapus.
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLang } from "@/lib/i18n/LanguageContext";
-import { useAuth } from "@/lib/auth";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -11,15 +14,17 @@ import { Select } from "@/components/ui/Select";
 import { Modal } from "@/components/ui/Modal";
 import { Badge } from "@/components/ui/Badge";
 import { Table, Th, Td } from "@/components/ui/Table";
-import {
-  getUsers,
-  addUser,
-  updateUser,
-  isUsernameTaken,
-  isEmailTaken,
-  type StoreUser,
-} from "@/lib/mock/users";
-import { logActivity } from "@/lib/mock/db";
+
+/** Bentuk user dari API (tanpa password/hash — dijaga server). */
+interface ApiUser {
+  id: string;
+  name: string;
+  username: string;
+  phone_number: string;
+  email: string | null;
+  role: "Owner" | "Kasir";
+  status: "aktif" | "nonaktif";
+}
 
 interface FormState {
   username: string;
@@ -27,7 +32,7 @@ interface FormState {
   phone_number: string;
   email: string;
   password: string;
-  status: "active" | "inactive";
+  status: "aktif" | "nonaktif";
 }
 
 // Password tidak prefill saat edit — kolom kosong = password lama tetap terpakai.
@@ -37,27 +42,49 @@ const emptyForm: FormState = {
   phone_number: "",
   email: "",
   password: "",
-  status: "active",
+  status: "aktif",
 };
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+/** mapping error code API -> teks lokal */
+function apiError(code: string, c: Record<string, string>): string {
+  switch (code) {
+    case "username_taken":
+      return c.errorUsernameTaken;
+    case "email_taken":
+    case "username_or_email_taken":
+      return c.errorEmailTaken;
+    case "name_required":
+      return c.errorNameRequired;
+    case "username_required":
+      return c.errorUsernameRequired;
+    case "phone_number_required":
+      return c.fieldPhone; // label saja; jarang terjadi (validasi utama di form)
+    case "password_min_8":
+      return c.errorPasswordMin ?? "Password minimal 8 karakter";
+    case "email_invalid":
+      return c.errorEmailInvalid;
+    case "forbidden":
+      return "Akses ditolak — hanya Owner.";
+    default:
+      return c.errorLoad ?? "Gagal menyimpan. Coba lagi.";
+  }
+}
+
 export default function KasirCrudPage() {
   const { t } = useLang();
-  const { user } = useAuth();
   const c = t.kasirAkun;
 
-  // ponytail: snapshot array mock saat mount — refresh balik ke data awal, ganti GET /api/users.
-  const [users, setUsers] = useState<StoreUser[]>(() =>
-    getUsers().filter((u) => u.role === "Kasir")
-  );
+  const [users, setUsers] = useState<ApiUser[]>([]);
   const [query, setQuery] = useState("");
-  const [loading] = useState(false); // mock sinkron — loading tetap disiapkan untuk API
-  const [loadError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ kind: "success" | "error"; text: string } | null>(null);
 
   const [modalOpen, setModalOpen] = useState(false);
-  const [editing, setEditing] = useState<StoreUser | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [editing, setEditing] = useState<ApiUser | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm);
   const [errors, setErrors] = useState<Partial<FormState>>({});
 
@@ -68,7 +95,30 @@ export default function KasirCrudPage() {
     return () => clearTimeout(timer);
   }, [toast]);
 
-  const refresh = () => setUsers(getUsers().filter((u) => u.role === "Kasir"));
+  // Daftar kasir dari DATABASE via API — tanpa fallback mock.
+  const refresh = useCallback(async () => {
+    try {
+      const res = await fetch("/api/kasir", { credentials: "same-origin" });
+      const json = (await res.json().catch(() => null)) as
+        | { data?: { users?: ApiUser[] } }
+        | null;
+      if (res.ok && json?.data?.users) {
+        setUsers(json.data.users);
+        setLoadError(null);
+      } else {
+        setLoadError(res.status === 403 ? c.forbidden : c.errorLoad);
+      }
+    } catch {
+      setLoadError(c.errorLoad);
+    } finally {
+      setLoading(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -85,13 +135,13 @@ export default function KasirCrudPage() {
     setModalOpen(true);
   };
 
-  const openEdit = (u: StoreUser) => {
+  const openEdit = (u: ApiUser) => {
     setEditing(u);
     setForm({
       username: u.username,
       name: u.name,
       phone_number: u.phone_number,
-      email: u.email,
+      email: u.email ?? "",
       password: "",
       status: u.status,
     });
@@ -99,70 +149,98 @@ export default function KasirCrudPage() {
     setModalOpen(true);
   };
 
-  const submit = () => {
+  const submit = async () => {
     const e: Partial<FormState> = {};
     const username = form.username.trim();
     const email = form.email.trim();
     if (!form.name.trim()) e.name = c.errorNameRequired;
     if (!username) e.username = c.errorUsernameRequired;
-    else if (isUsernameTaken(username, editing?.id)) e.username = c.errorUsernameTaken;
     if (!editing && !form.password) e.password = c.errorPasswordRequired;
+    else if (form.password && form.password.length < 8)
+      e.password = c.errorPasswordMin ?? e.password;
     if (email && !EMAIL_RE.test(email)) e.email = c.errorEmailInvalid;
-    // M-11 (UC-21): email unik — saat edit, milik sendiri tidak dianggap duplikat.
-    else if (email && isEmailTaken(email, editing?.id)) e.email = c.errorEmailTaken;
+    // Duplikat username/email tetap ditegakkan server (satu-satunya sumber benar).
     setErrors(e);
     if (Object.keys(e).length) return;
 
-    if (editing) {
-      // Password hanya diubah bila diisi; plaintext lama tidak pernah ditampilkan.
-      updateUser(editing.id, {
-        username,
-        name: form.name.trim(),
-        phone_number: form.phone_number.trim(),
-        email,
-        status: form.status,
-        ...(form.password ? { password: form.password } : {}),
-      });
-      logActivity(
-        user ? { id: user.id, name: user.name } : null,
-        "cashierEdit",
-        `Ubah akun kasir ${form.name.trim()}`
-      );
-      setToast({ kind: "success", text: c.successUpdated });
-    } else {
-      addUser({
-        username,
-        name: form.name.trim(),
-        phone_number: form.phone_number.trim(),
-        email,
-        password: form.password,
-        role: "Kasir", // selalu Kasir sesuai ERD USERS
-        status: form.status,
-      });
-      logActivity(
-        user ? { id: user.id, name: user.name } : null,
-        "cashierAdd",
-        `Tambah akun kasir ${form.name.trim()}`
-      );
-      setToast({ kind: "success", text: c.successAdded });
+    setSaving(true);
+    try {
+      const res = editing
+        ? await fetch(`/api/kasir/${editing.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            credentials: "same-origin",
+            body: JSON.stringify({
+              username,
+              name: form.name.trim(),
+              phone_number: form.phone_number.trim(),
+              email,
+              status: form.status,
+              ...(form.password ? { password: form.password } : {}),
+            }),
+          })
+        : await fetch("/api/kasir", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "same-origin",
+            body: JSON.stringify({
+              username,
+              name: form.name.trim(),
+              phone_number: form.phone_number.trim(),
+              email,
+              password: form.password,
+              status: form.status,
+            }),
+          });
+      const json = (await res.json().catch(() => null)) as
+        | { ok?: boolean; error?: string }
+        | null;
+      if (res.ok) {
+        setModalOpen(false);
+        await refresh();
+        setToast({
+          kind: "success",
+          text: editing ? c.successUpdated : c.successAdded,
+        });
+      } else {
+        const code = json?.error ?? "server";
+        // error unik tampil di field-nya masing-masing
+        if (code === "username_taken") setErrors({ username: c.errorUsernameTaken });
+        else if (code === "email_taken" || code === "username_or_email_taken")
+          setErrors({ email: c.errorEmailTaken });
+        else setToast({ kind: "error", text: apiError(code, c as unknown as Record<string, string>) });
+      }
+    } catch {
+      setToast({ kind: "error", text: c.errorLoad });
+    } finally {
+      setSaving(false);
     }
-    refresh();
-    setModalOpen(false);
   };
 
-  const toggleStatus = (u: StoreUser) => {
-    const active = u.status === "active";
-    const ok = window.confirm(active ? c.deactivateConfirm : c.activateConfirm);
-    if (!ok) return;
-    updateUser(u.id, { status: active ? "inactive" : "active" });
-    // Nonaktif = penggantian hapus sesuai PRD (akun tetap ada, tidak bisa login).
-    logActivity(
-      user ? { id: user.id, name: user.name } : null,
-      active ? "cashierDeactivate" : "cashierActivate",
-      `${active ? "Nonaktifkan" : "Aktifkan kembali"} akun kasir ${u.name}`
-    );
-    refresh();
-    setToast({ kind: "success", text: active ? c.successDeactivated : c.successActivated });
+  const toggleStatus = async (u: ApiUser) => {
+    const active = u.status === "aktif";
+    if (!window.confirm(active ? c.deactivateConfirm : c.activateConfirm)) return;
+    try {
+      const res = await fetch(`/api/kasir/${u.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ status: active ? "nonaktif" : "aktif" }),
+      });
+      if (res.ok) {
+        // Nonaktif = pengganti hapus sesuai PRD (akun tetap ada, tak bisa login).
+        await refresh();
+        setToast({
+          kind: "success",
+          text: active ? c.successDeactivated : c.successActivated,
+        });
+      } else {
+        const json = (await res.json().catch(() => null)) as { error?: string } | null;
+        setToast({ kind: "error", text: apiError(json?.error ?? "server", c as unknown as Record<string, string>) });
+      }
+    } catch {
+      setToast({ kind: "error", text: c.errorLoad });
+    }
   };
 
   const actionBtn = "p-1.5 rounded-md hover:bg-zinc-100 transition-colors";
@@ -226,11 +304,11 @@ export default function KasirCrudPage() {
               <tr key={u.id} className="hover:bg-zinc-50/70">
                 <Td className="font-medium text-foreground whitespace-nowrap">{u.name}</Td>
                 <Td className="text-muted whitespace-nowrap">{u.username}</Td>
-                <Td className="text-muted tabular-nums whitespace-nowrap">{u.phone_number}</Td>
-                <Td className="text-muted max-w-xs truncate">{u.email}</Td>
+                <Td className="text-muted tabular-nums whitespace-nowrap">{u.phone_number || "—"}</Td>
+                <Td className="text-muted max-w-xs truncate">{u.email || "—"}</Td>
                 <Td className="text-center">
-                  <Badge variant={u.status === "active" ? "success" : "muted"}>
-                    {u.status === "active" ? t.status.active : t.status.inactive}
+                  <Badge variant={u.status === "aktif" ? "success" : "muted"}>
+                    {u.status === "aktif" ? t.status.active : t.status.inactive}
                   </Badge>
                 </Td>
                 <Td>
@@ -250,11 +328,11 @@ export default function KasirCrudPage() {
                       type="button"
                       onClick={() => toggleStatus(u)}
                       className={actionBtn}
-                      title={u.status === "active" ? c.deactivateLabel : c.activateLabel}
-                      aria-label={u.status === "active" ? c.deactivateLabel : c.activateLabel}
+                      title={u.status === "aktif" ? c.deactivateLabel : c.activateLabel}
+                      aria-label={u.status === "aktif" ? c.deactivateLabel : c.activateLabel}
                     >
                       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="text-muted">
-                        {u.status === "active" ? (
+                        {u.status === "aktif" ? (
                           <path d="M18.36 6.64a9 9 0 11-12.72 0M12 2v10" />
                         ) : (
                           <>
@@ -263,9 +341,9 @@ export default function KasirCrudPage() {
                           </>
                         )}
                       </svg>
-                      </button>
-                      </div>
-                      </Td>
+                    </button>
+                  </div>
+                </Td>
               </tr>
             ))}
           </Table>
@@ -295,7 +373,9 @@ export default function KasirCrudPage() {
             <Button variant="secondary" onClick={() => setModalOpen(false)}>
               {t.common.cancel}
             </Button>
-            <Button onClick={submit}>{t.common.save}</Button>
+            <Button onClick={submit} disabled={saving}>
+              {t.common.save}
+            </Button>
           </>
         }
       >
@@ -346,8 +426,8 @@ export default function KasirCrudPage() {
               setForm({ ...form, status: e.target.value as FormState["status"] })
             }
           >
-            <option value="active">{t.status.active}</option>
-            <option value="inactive">{t.status.inactive}</option>
+            <option value="aktif">{t.status.active}</option>
+            <option value="nonaktif">{t.status.inactive}</option>
           </Select>
         </div>
       </Modal>

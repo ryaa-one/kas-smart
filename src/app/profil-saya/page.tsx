@@ -8,42 +8,44 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Badge } from "@/components/ui/Badge";
 import { useAuth } from "@/lib/auth";
-import { updateUser, isUsernameTaken, isEmailTaken } from "@/lib/mock/users";
 import { logActivity } from "@/lib/mock/db";
 
 interface ProfileForm {
   name: string;
-  username: string;
   phone: string;
   email: string;
+  currentPassword: string;
   password: string;
   confirm: string;
 }
 
-// Workflow Profil Saya (PRD): lihat info akun, ubah nama/username/password/
-// telepon/email. Perubahan hanya untuk akun yang sedang login (UC-24).
+// Workflow Profil Saya (PRD UC-24): lihat info akun + ubah nama/telepon/email/
+// password untuk akun YANG SEDANG LOGIN. Identitas diambil dari sesi
+// (GET /api/auth/me) — bukan id dari frontend. Username/id/role/status tidak
+// dapat diubah (read-only). Password diverifikasi ulang di server
+// (PATCH /api/auth/profile) — hash tidak pernah keluar dari server.
 export default function ProfilSayaPage() {
   const { t } = useLang();
   const { user } = useAuth();
 
   const [form, setForm] = useState<ProfileForm>({
     name: user?.name ?? "",
-    username: user?.username ?? "",
     phone: user?.phone ?? "",
     email: user?.email ?? "",
+    currentPassword: "",
     password: "",
     confirm: "",
   });
-  const [errors, setErrors] = useState<Partial<Record<keyof ProfileForm, string>>>({});
+  const [errors, setErrors] = useState<Partial<Record<keyof ProfileForm | "general", string>>>({});
+  const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
-  // Guard me-render halaman setelah user siap — sinkronkan form saat user belum termuat.
+  // Sinkronkan form saat sesi pulih dari /me (refresh halaman).
   useEffect(() => {
     if (user) {
       setForm((f) => ({
         ...f,
         name: f.name || user.name,
-        username: f.username || user.username,
         phone: f.phone || user.phone,
         email: f.email || user.email,
       }));
@@ -53,35 +55,68 @@ export default function ProfilSayaPage() {
   const set = (patch: Partial<ProfileForm>) =>
     setForm((f) => ({ ...f, ...patch }));
 
-  const submit = (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const err: Partial<Record<keyof ProfileForm, string>> = {};
+    if (!user) return;
+    const err: typeof errors = {};
     if (!form.name.trim()) err.name = t.profil.errorNameRequired;
-    if (!form.username.trim()) err.username = t.profil.errorUsernameRequired;
-    if (!form.phone.trim()) err.phone = t.profil.errorPhoneRequired;
-    if (form.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) err.email = t.profil.errorEmailInvalid;
-    if (form.password && form.password.length < 8) err.password = t.profil.errorPasswordMin;
-    if (form.password && form.password !== form.confirm) err.confirm = t.profil.errorPasswordMismatch;
-    // Username tidak boleh milik akun lain (store USERS).
-    if (user && form.username.trim() !== user.username && isUsernameTaken(form.username.trim()))
-    err.username = t.kasirAkun.errorUsernameTaken;
-    // M-11: email juga unik lintas USERS (milik sendiri saat edit bukan duplikat).
-    if (user && form.email.trim() && isEmailTaken(form.email.trim(), user.id))
-    err.email = t.kasirAkun.errorEmailTaken;
+    if (form.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email))
+      err.email = t.profil.errorEmailInvalid;
+    if (form.password) {
+      if (!form.currentPassword)
+        err.currentPassword = t.profil.errorCurrentPasswordRequired;
+      if (form.password.length < 8) err.password = t.profil.errorPasswordMin;
+      if (form.password !== form.confirm) err.confirm = t.profil.errorPasswordMismatch;
+    }
     setErrors(err);
-    if (Object.keys(err).length || !user) return;
+    if (Object.keys(err).length) return;
 
-    // Simpan ke USERS (localStorage) + ACTIVITY_LOGS — efek terasa setelah logout/login.
-    updateUser(user.id, {
-    name: form.name.trim(),
-    username: form.username.trim(),
-    phone_number: form.phone.trim(),
-    email: form.email.trim() || undefined,
-    ...(form.password ? { password: form.password } : {}),
-    });
-    logActivity({ id: user.id, name: form.name.trim() || user.name }, "profileChange", "Perbarui profil saya");
-    setSaved(true);
-    setTimeout(() => setSaved(false), 3000);
+    setSaving(true);
+    try {
+      const res = await fetch("/api/auth/profile", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          name: form.name.trim(),
+          phone_number: form.phone.trim(),
+          email: form.email.trim(),
+          ...(form.password
+            ? { current_password: form.currentPassword, password: form.password }
+            : {}),
+        }),
+      });
+      const json = (await res.json().catch(() => null)) as
+        | { data?: { user?: { name: string; email: string | null; phone_number: string } }; error?: string }
+        | null;
+      if (!res.ok) {
+        const code = json?.error ?? "server";
+        setErrors({
+          general:
+            code === "current_password_incorrect"
+              ? t.profil.errorCurrentPasswordIncorrect
+              : code === "current_password_required"
+                ? t.profil.errorCurrentPasswordRequired
+                : code === "email_taken"
+                  ? t.kasirAkun.errorEmailTaken
+                  : t.kasirAkun.errorLoad,
+        });
+        return;
+      }
+      // Sinkron ringan: mock log utk widget aktivitas; nama tampil ikut ter-update.
+      logActivity(
+        { id: user.id, name: form.name.trim() || user.name },
+        "profileChange",
+        "Perbarui profil saya"
+      );
+      setForm((f) => ({ ...f, currentPassword: "", password: "", confirm: "" }));
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
+    } catch {
+      setErrors({ general: t.kasirAkun.errorLoad });
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -94,7 +129,7 @@ export default function ProfilSayaPage() {
               {(form.name || "A").charAt(0).toUpperCase()}
             </div>
             <p className="text-base font-bold text-foreground mt-3">{form.name}</p>
-            <p className="text-sm text-muted">@{form.username}</p>
+            <p className="text-sm text-muted">@{user?.username}</p>
             <div className="mt-3">
               <Badge variant="primary">
                 {user?.role === "Kasir" ? t.common.roleKasir : t.common.roleOwner}
@@ -108,6 +143,11 @@ export default function ProfilSayaPage() {
           <h3 className="text-sm font-semibold text-foreground mb-4">
             {t.profil.accountInfo}
           </h3>
+          {errors.general && (
+            <div className="mb-4 p-3 rounded-lg bg-red-50 border border-red-200 text-sm text-danger">
+              {errors.general}
+            </div>
+          )}
           <form onSubmit={submit} className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input
               label={t.profil.fieldName}
@@ -116,10 +156,11 @@ export default function ProfilSayaPage() {
               error={errors.name}
             />
             <Input
-              label={t.profil.fieldUsername}
-              value={form.username}
-              onChange={(e) => set({ username: e.target.value })}
-              error={errors.username}
+              label={`${t.profil.fieldUsername} — ${t.profil.fieldUsernameReadonly}`}
+              value={user?.username ?? ""}
+              readOnly
+              disabled
+              className="opacity-60 cursor-not-allowed"
             />
             <Input
               type="tel"
@@ -135,6 +176,16 @@ export default function ProfilSayaPage() {
               onChange={(e) => set({ email: e.target.value })}
               error={errors.email}
             />
+            {form.password && (
+              <Input
+                type="password"
+                label={t.profil.fieldCurrentPassword}
+                value={form.currentPassword}
+                onChange={(e) => set({ currentPassword: e.target.value })}
+                error={errors.currentPassword}
+                autoComplete="current-password"
+              />
+            )}
             <Input
               type="password"
               label={t.profil.fieldNewPassword}
@@ -153,7 +204,9 @@ export default function ProfilSayaPage() {
               autoComplete="new-password"
             />
             <div className="sm:col-span-2 flex items-center gap-3">
-              <Button type="submit">{t.common.save}</Button>
+              <Button type="submit" disabled={saving}>
+                {t.common.save}
+              </Button>
               {saved && (
                 <span className="flex items-center gap-1.5 text-sm font-medium text-success">
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M20 6L9 17l-5-5" /></svg>

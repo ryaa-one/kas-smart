@@ -46,9 +46,9 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
   const items = navByRole[role];
   const roleLabel = role === "Owner" ? t.common.roleOwner : t.common.roleKasir;
 
-  const handleLogout = () => {
-    // UC-02 Logout — backend nanti: panggil API + catat ACTIVITY_LOGS.logout.
-    logout();
+  const handleLogout = async () => {
+    // UC-02 Logout — hapus cookie sesi via POST /api/auth/logout lalu ke login.
+    await logout();
     window.location.href = "/login";
   };
 

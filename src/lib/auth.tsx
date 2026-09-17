@@ -1,8 +1,11 @@
 "use client";
 
-// Mock authentication sementara — struktur ready diganti API backend.
-// Ganti isi login() dengan panggilan API nanti; AuthContext tetap terpakai.
-// Data akun ada di lib/mock/users.ts (dipakai juga CRUD Kasir Owner).
+// Autentikasi KasSmart — berbasis API server (bukan mock/localStorage).
+// Sesi = cookie httpOnly `kassmart_session` dari POST /api/auth/login;
+// client TIDAK menyimpan token/password apa pun — pemulihan state setelah
+// refresh memakai GET /api/auth/me (server yang memvalidasi cookie).
+// Interface useAuth dipertahankan agar halaman lama tidak perlu dirombak.
+
 import {
   createContext,
   useContext,
@@ -11,7 +14,6 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { authenticate, type StoreUser } from "@/lib/mock/users";
 import { logActivity } from "@/lib/mock/db";
 
 export type Role = "Owner" | "Kasir";
@@ -21,72 +23,124 @@ export interface AuthUser {
   name: string; // USERS.name
   username: string; // USERS.username
   phone: string; // USERS.phone_number
-  email: string; // USERS.email
+  email: string; // USERS.email (NULL di DB -> "" di sini)
   role: Role; // USERS.role
 }
 
-const STORAGE_KEY = "kassmart_session";
+// Bentuk respons API (lihat src/app/api/auth/*): { ok, data } | { ok:false, error }
+interface ApiUser {
+  id: string;
+  name: string;
+  username: string;
+  phone_number: string;
+  email: string | null;
+  role: Role;
+}
+
+function toAuthUser(u: ApiUser): AuthUser {
+  return {
+    id: u.id,
+    name: u.name,
+    username: u.username,
+    phone: u.phone_number,
+    email: u.email ?? "",
+    role: u.role,
+  };
+}
+
+export type LoginResult =
+  | { ok: true; user: AuthUser }
+  | { ok: false; reason: "invalid" | "inactive" | "network" };
 
 interface AuthContextType {
   user: AuthUser | null;
   login: (
     username: string,
     password: string
-  ) => { ok: true; user: AuthUser } | { ok: false; reason: "invalid" | "inactive" };
-  logout: () => void;
-  hydrated: boolean; // false sebelum localStorage selesai dibaca (hindari redirect salah)
+  ) => Promise<LoginResult>;
+  logout: () => Promise<void>;
+  hydrated: boolean; // false sampai GET /api/auth/me pertama selesai
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
-
-function toAuthUser(u: StoreUser): AuthUser {
-  const { id, name, username, phone_number, email, role } = u;
-  return { id, name, username, phone: phone_number, email, role };
-}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [hydrated, setHydrated] = useState(false);
 
-  // Pulihkan sesi dari localStorage saat pertama load.
+  // Pulihkan sesi dari cookie (server-side) saat pertama load.
   useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(STORAGE_KEY);
-      if (raw) setUser(JSON.parse(raw) as AuthUser);
-    } catch {
-      // sesi rusak — abaikan
-    }
-    setHydrated(true);
+    let cancelled = false;
+    fetch("/api/auth/me", { credentials: "same-origin" })
+      .then(async (res) => {
+        if (res.status === 200) {
+          const json = (await res.json()) as { data?: { user?: ApiUser } };
+          if (!cancelled && json.data?.user) setUser(toAuthUser(json.data.user));
+        }
+      })
+      .catch(() => {
+        // server mati/ offline — anggap belum login
+      })
+      .finally(() => {
+        if (!cancelled) setHydrated(true);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  const value: AuthContextType = useMemo(
+  const value = useMemo<AuthContextType>(
     () => ({
       user,
-      login: (username, password) => {
-        // ponytail: mock lookup lokal — ganti POST /api/login saat backend ada.
-        const res = authenticate(username, password);
-        if (!res.ok) return { ok: false, reason: res.reason };
-        const authUser = toAuthUser(res.user);
-        setUser(authUser);
-        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(authUser));
-        // FR-19: login dicatat ke ACTIVITY_LOGS (store bersama).
-        logActivity({ id: authUser.id, name: authUser.name }, "login", "Login ke sistem");
-        return { ok: true, user: authUser };
-        },
-        logout: () => {
-        if (user) logActivity({ id: user.id, name: user.name }, "logout", "Logout dari sistem");
+      login: async (username, password) => {
+        try {
+          const res = await fetch("/api/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "same-origin",
+            body: JSON.stringify({ username, password }),
+          });
+          const json = (await res.json().catch(() => null)) as
+            | { data?: { user?: ApiUser } }
+            | null;
+          if (res.status === 200 && json?.data?.user) {
+            const authUser = toAuthUser(json.data.user);
+            setUser(authUser);
+            // Log aktivitas mock store lama dipertahankan supaya dashboard
+            // "aktivitas terbaru" tetap berisi selama halaman lain belum
+            // dimigrasi (API sudah menulis ACTIVITY_LOGS DB tersendiri).
+            logActivity(
+              { id: authUser.id, name: authUser.name },
+              "login",
+              "Login ke sistem"
+            );
+            return { ok: true, user: authUser };
+          }
+          if (res.status === 403) return { ok: false, reason: "inactive" };
+          if (res.status === 401) return { ok: false, reason: "invalid" };
+          return { ok: false, reason: "invalid" };
+        } catch {
+          return { ok: false, reason: "network" };
+        }
+      },
+      logout: async () => {
+        try {
+          await fetch("/api/auth/logout", {
+            method: "POST",
+            credentials: "same-origin",
+          });
+        } catch {
+          // gagal network — state lokal tetap dibersihkan
+        }
         setUser(null);
-        window.localStorage.removeItem(STORAGE_KEY);
-        },
-        hydrated,
-        }),
-        [user, hydrated]
+      },
+      hydrated,
+    }),
+    [user, hydrated]
   );
 
   return (
-    <AuthContext.Provider value={value}>
-      {children}
-    </AuthContext.Provider>
+    <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
   );
 }
 
