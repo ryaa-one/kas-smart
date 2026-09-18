@@ -4,7 +4,7 @@
 // GET/POST /api/suppliers | GET/PATCH/DELETE /api/suppliers/:id
 // UI layout/responsif/i18n tetap sama, hanya source data yang berubah.
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useLang } from "@/lib/i18n/LanguageContext";
 import { useAuth } from "@/lib/auth";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/Input";
 import { Textarea } from "@/components/ui/Textarea";
 import { Modal } from "@/components/ui/Modal";
 import { Table, Th, Td } from "@/components/ui/Table";
+import { Pagination } from "@/components/ui/Pagination";
 
 interface Supplier {
   id: string;
@@ -46,6 +47,43 @@ export default function SupplierPage() {
   const [submitting, setSubmitting] = useState(false);
 
   const [blockMsg, setBlockMsg] = useState("");
+  const [query, setQuery] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return suppliers;
+    return suppliers.filter(
+      (s) =>
+        s.name.toLowerCase().includes(q) ||
+        (s.phone && s.phone.toLowerCase().includes(q))
+    );
+  }, [suppliers, query]);
+
+  // Reset ke halaman 1 saat query pencarian berubah
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [query]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+
+  // Pastikan halaman tetap valid bila total data berkurang
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
+
+  const paginated = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filtered.slice(start, start + pageSize);
+  }, [filtered, currentPage, pageSize]);
+
+  const resetFilters = () => {
+    setQuery("");
+    setCurrentPage(1);
+  };
 
   // Fetch suppliers dari API
   const fetchSuppliers = async () => {
@@ -190,21 +228,44 @@ export default function SupplierPage() {
   return (
     <DashboardLayout title={t.supplier.title} subtitle={t.supplier.subtitle}>
       <Card>
-        <div className="flex justify-end mb-4">
-          <Button onClick={openAdd}>
-            <svg
-              width="15"
-              height="15"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-            >
-              <path d="M12 5v14M5 12h14" />
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2 mb-4">
+          <div className="flex items-center gap-2 flex-1 min-w-0 rounded-lg border border-line bg-zinc-50 px-3 py-2 focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/10 transition-colors">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="text-muted shrink-0">
+              <circle cx="11" cy="11" r="7" />
+              <path d="M21 21l-4-4" />
             </svg>
-            {t.common.add}
-          </Button>
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={t.supplier.searchPlaceholder || "Cari nama / nomor telepon supplier..."}
+              className="flex-1 min-w-0 bg-transparent text-sm outline-none placeholder:text-muted/60"
+            />
+          </div>
+          {query.trim() !== "" && (
+            <button
+              type="button"
+              onClick={resetFilters}
+              className="px-3 py-2 rounded-lg border border-dashed border-line hover:border-danger hover:text-danger text-muted text-xs font-medium transition-colors cursor-pointer self-start sm:self-auto"
+            >
+              {t.common.resetFilter}
+            </button>
+          )}
+          <div className="sm:ml-auto">
+            <Button onClick={openAdd}>
+              <svg
+                width="15"
+                height="15"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              >
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+              {t.common.add}
+            </Button>
+          </div>
         </div>
 
         {error && (
@@ -244,73 +305,83 @@ export default function SupplierPage() {
             {t.common.loading || "Memuat..."}
           </div>
         ) : (
-          <Table
-            empty={t.supplier.empty}
-            head={
-              <>
-                <Th>{t.supplier.tableSupplier}</Th>
-                <Th>{t.supplier.tablePhone}</Th>
-                <Th>{t.supplier.tableAddress}</Th>
-                <Th className="text-center">{t.supplier.tablePurchaseCount}</Th>
-                <Th className="text-right">{t.common.actions}</Th>
-              </>
-            }
-          >
-            {suppliers.map((s) => (
-              <tr key={s.id} className="hover:bg-zinc-50/70">
-                <Td className="font-medium text-foreground whitespace-nowrap">{s.name}</Td>
-                <Td className="text-muted tabular-nums whitespace-nowrap">{s.phone}</Td>
-                <Td className="text-muted max-w-xs truncate">{s.address}</Td>
-                <Td className="text-center tabular-nums text-muted">{s.purchase_count}</Td>
-                <Td>
-                  <div className="flex items-center justify-end gap-1">
-                    <button
-                      type="button"
-                      onClick={() => openEdit(s)}
-                      className={actionBtn}
-                      title={t.common.edit}
-                      aria-label={t.common.edit}
-                    >
-                      <svg
-                        width="15"
-                        height="15"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.7"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        className="text-muted"
+          <>
+            <Table
+              empty={query.trim() ? (t.supplier.emptySearch || "Tidak ada supplier yang cocok") : t.supplier.empty}
+              head={
+                <>
+                  <Th>{t.supplier.tableSupplier}</Th>
+                  <Th>{t.supplier.tablePhone}</Th>
+                  <Th>{t.supplier.tableAddress}</Th>
+                  <Th className="text-center">{t.supplier.tablePurchaseCount}</Th>
+                  <Th className="text-right">{t.common.actions}</Th>
+                </>
+              }
+            >
+              {paginated.map((s) => (
+                <tr key={s.id} className="hover:bg-zinc-50/70">
+                  <Td className="font-medium text-foreground whitespace-nowrap">{s.name}</Td>
+                  <Td className="text-muted tabular-nums whitespace-nowrap">{s.phone}</Td>
+                  <Td className="text-muted max-w-xs truncate">{s.address}</Td>
+                  <Td className="text-center tabular-nums text-muted">{s.purchase_count}</Td>
+                  <Td>
+                    <div className="flex items-center justify-end gap-1">
+                      <button
+                        type="button"
+                        onClick={() => openEdit(s)}
+                        className={actionBtn}
+                        title={t.common.edit}
+                        aria-label={t.common.edit}
                       >
-                        <path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4L16.5 3.5z" />
-                      </svg>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => removeSupplierGuarded(s.id, s.name)}
-                      className={actionBtn}
-                      title={t.common.delete}
-                      aria-label={t.common.delete}
-                    >
-                      <svg
-                        width="15"
-                        height="15"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.7"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        className="text-muted hover:text-danger"
+                        <svg
+                          width="15"
+                          height="15"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.7"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          className="text-muted"
+                        >
+                          <path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4L16.5 3.5z" />
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => removeSupplierGuarded(s.id, s.name)}
+                        className={actionBtn}
+                        title={t.common.delete}
+                        aria-label={t.common.delete}
                       >
-                        <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
-                      </svg>
-                    </button>
-                  </div>
-                </Td>
-              </tr>
-            ))}
-          </Table>
+                        <svg
+                          width="15"
+                          height="15"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.7"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          className="text-muted hover:text-danger"
+                        >
+                          <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
+                        </svg>
+                      </button>
+                    </div>
+                  </Td>
+                </tr>
+              ))}
+            </Table>
+            <Pagination
+              currentPage={currentPage}
+              totalPages={totalPages}
+              totalItems={filtered.length}
+              pageSize={pageSize}
+              onPageChange={setCurrentPage}
+              onPageSizeChange={setPageSize}
+            />
+          </>
         )}
       </Card>
 

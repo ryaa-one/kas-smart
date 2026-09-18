@@ -15,6 +15,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Modal } from "@/components/ui/Modal";
 import { BarcodeScanner } from "@/components/ui/BarcodeScanner";
 import { Table, Th, Td } from "@/components/ui/Table";
+import { Pagination } from "@/components/ui/Pagination";
 import { formatRupiah } from "@/lib/format";
 
 interface ApiProduct {
@@ -69,6 +70,9 @@ export default function ProdukPage() {
 
   const [query, setQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"" | "aktif" | "nonaktif">("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const [modalOpen, setModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState<ApiProduct | null>(null);
@@ -148,12 +152,36 @@ export default function ProdukPage() {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return products.filter(
-      (pr) =>
-        (!categoryFilter || pr.category_id === categoryFilter) &&
-        (!q || pr.name.toLowerCase().includes(q) || (pr.barcode ?? "").includes(q))
-    );
-  }, [products, query, categoryFilter]);
+    return products.filter((pr) => {
+      const matchCategory = !categoryFilter || pr.category_id === categoryFilter;
+      const matchSearch =
+        !q ||
+        pr.name.toLowerCase().includes(q) ||
+        (pr.barcode ?? "").toLowerCase().includes(q);
+      const matchStatus =
+        !statusFilter ||
+        (statusFilter === "aktif" ? pr.is_active : !pr.is_active);
+      return matchCategory && matchSearch && matchStatus;
+    });
+  }, [products, query, categoryFilter, statusFilter]);
+
+  // Reset ke halaman 1 saat filter berubah
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [query, categoryFilter, statusFilter]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
+
+  const paginated = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filtered.slice(start, start + pageSize);
+  }, [filtered, currentPage, pageSize]);
 
   const openAdd = () => {
     setEditing(null);
@@ -287,11 +315,19 @@ export default function ProdukPage() {
   const actionBtn =
     "p-1.5 rounded-md hover:bg-zinc-100 transition-colors shrink-0";
 
+  const hasFilter = query.trim() !== "" || categoryFilter !== "" || statusFilter !== "";
+  const resetFilters = () => {
+    setQuery("");
+    setCategoryFilter("");
+    setStatusFilter("");
+    setCurrentPage(1);
+  };
+
   return (
     <DashboardLayout title={p.title} subtitle={p.subtitle}>
       <Card>
-        {/* Toolbar: search + filter kategori + tombol tambah */}
-        <div className="flex flex-col sm:flex-row sm:items-center gap-2 mb-4">
+        {/* Toolbar: search + filter kategori + filter status + reset + tombol tambah */}
+        <div className="flex flex-col lg:flex-row lg:items-center gap-2 mb-4">
           <div className="flex items-center gap-2 flex-1 min-w-0 rounded-lg border border-line bg-zinc-50 px-3 py-2 focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/10 transition-colors">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="text-muted shrink-0">
               <circle cx="11" cy="11" r="7" />
@@ -304,22 +340,44 @@ export default function ProdukPage() {
               className="flex-1 min-w-0 bg-transparent text-sm outline-none placeholder:text-muted/60"
             />
           </div>
-          <select
-            value={categoryFilter}
-            onChange={(e) => setCategoryFilter(e.target.value)}
-            className="px-3 py-2 rounded-lg border border-line bg-white text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/10"
-          >
-            <option value="">{p.filterAllCategories}</option>
-            {categories.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
-          </select>
-          <Button onClick={openAdd}>
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-              <path d="M12 5v14M5 12h14" />
-            </svg>
-            {t.common.add}
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+              aria-label={p.fieldCategory}
+              className="px-3 py-2 rounded-lg border border-line bg-white text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/10"
+            >
+              <option value="">{p.filterAllCategories}</option>
+              {categories.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value as "" | "aktif" | "nonaktif")}
+              aria-label={t.common.filterStatus}
+              className="px-3 py-2 rounded-lg border border-line bg-white text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/10"
+            >
+              <option value="">{p.filterAllStatus || t.common.filterStatusAll}</option>
+              <option value="aktif">{t.status.active}</option>
+              <option value="nonaktif">{t.status.inactive}</option>
+            </select>
+            {hasFilter && (
+              <button
+                type="button"
+                onClick={resetFilters}
+                className="px-3 py-2 rounded-lg border border-dashed border-line hover:border-danger hover:text-danger text-muted text-xs font-medium transition-colors cursor-pointer"
+              >
+                {t.common.resetFilter}
+              </button>
+            )}
+            <Button onClick={openAdd}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+              {t.common.add}
+            </Button>
+          </div>
         </div>
 
         {toast && (
@@ -342,72 +400,88 @@ export default function ProdukPage() {
         ) : loading ? (
           <p className="text-center text-sm text-muted py-10">{t.common.loading}</p>
         ) : (
-          <Table
-            empty={query ? p.emptySearch : p.empty}
-            head={
-              <>
-                <Th>{p.tableBarcode}</Th>
-                <Th>{p.tableProduct}</Th>
-                <Th>{p.tableCategory}</Th>
-                <Th className="text-right">{p.tablePurchasePrice}</Th>
-                <Th className="text-right">{p.tableSellingPrice}</Th>
-                <Th className="text-center">{p.tableStock}</Th>
-                <Th className="text-center">{p.tableStatus}</Th>
-                <Th className="text-right">{t.common.actions}</Th>
-              </>
-            }
-          >
-            {filtered.map((pr) => (
-              <tr key={pr.id} className="hover:bg-zinc-50/70">
-                <Td className="tabular-nums text-muted whitespace-nowrap">
-                  {pr.barcode ?? <span className="italic">{p.noBarcode}</span>}
-                </Td>
-                <Td className="font-medium text-foreground">{pr.name}</Td>
-                <Td className="text-muted">{catName(pr.category_id)}</Td>
-                <Td className="text-right tabular-nums">{formatRupiah(pr.purchase_price)}</Td>
-                <Td className="text-right tabular-nums font-medium">{formatRupiah(pr.selling_price)}</Td>
-                <Td className="text-center">
-                  <span className={`tabular-nums font-medium ${pr.stock <= pr.minimum_stock ? "text-danger" : "text-foreground"}`}>
-                    {pr.stock}
-                  </span>
-                </Td>
-                <Td className="text-center">
-                  <Badge variant={pr.is_active ? "success" : "muted"}>
-                    {pr.is_active ? t.status.active : t.status.inactive}
-                  </Badge>
-                </Td>
-                <Td>
-                  <div className="flex items-center justify-end gap-1">
-                    <button type="button" onClick={() => openEdit(pr)} className={actionBtn} title={t.common.edit} aria-label={t.common.edit}>
-                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="text-muted">
-                        <path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4L16.5 3.5z" />
-                      </svg>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => toggleActive(pr)}
-                      className={actionBtn}
-                      title={pr.is_active ? p.deactivateLabel : p.activateLabel}
-                      aria-label={pr.is_active ? p.deactivateLabel : p.activateLabel}
-                    >
-                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className={pr.is_active ? "text-danger" : "text-success"}>
-                        {pr.is_active ? (
-                          <path d="M18.36 6.64a9 9 0 11-12.73 0M12 2v10" />
-                        ) : (
-                          <path d="M20 6L9 17l-5-5" />
-                        )}
-                      </svg>
-                    </button>
-                    <button type="button" onClick={() => removeProduct(pr)} className={actionBtn} title={p.deactivateLabel} aria-label={p.deactivateLabel}>
-                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="text-muted hover:text-danger">
-                        <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
-                      </svg>
-                    </button>
-                  </div>
-                </Td>
-              </tr>
-            ))}
-          </Table>
+          <>
+            <Table
+              empty={hasFilter ? p.emptySearch : p.empty}
+              head={
+                <>
+                  <Th>{p.tableBarcode}</Th>
+                  <Th>{p.tableProduct}</Th>
+                  <Th>{p.tableCategory}</Th>
+                  <Th className="text-right">{p.tablePurchasePrice}</Th>
+                  <Th className="text-right">{p.tableSellingPrice}</Th>
+                  <Th className="text-center">{p.tableStock}</Th>
+                  <Th className="text-center">{p.tableStatus}</Th>
+                  <Th className="text-right">{t.common.actions}</Th>
+                </>
+              }
+            >
+              {paginated.map((pr) => (
+                <tr key={pr.id} className="hover:bg-zinc-50/70">
+                  <Td className="tabular-nums text-muted whitespace-nowrap">
+                    {pr.barcode ?? <span className="italic">{p.noBarcode}</span>}
+                  </Td>
+                  <Td className="font-medium text-foreground">{pr.name}</Td>
+                  <Td className="text-muted">{catName(pr.category_id)}</Td>
+                  <Td className="text-right tabular-nums">{formatRupiah(pr.purchase_price)}</Td>
+                  <Td className="text-right tabular-nums font-medium">{formatRupiah(pr.selling_price)}</Td>
+                  <Td className="text-center">
+                    <span className={`tabular-nums font-medium ${pr.stock <= pr.minimum_stock ? "text-danger" : "text-foreground"}`}>
+                      {pr.stock}
+                    </span>
+                  </Td>
+                  <Td className="text-center">
+                    <Badge variant={pr.is_active ? "success" : "muted"}>
+                      {pr.is_active ? t.status.active : t.status.inactive}
+                    </Badge>
+                  </Td>
+                  <Td>
+                    <div className="flex items-center justify-end gap-1">
+                      <button
+                        type="button"
+                        onClick={() => openEdit(pr)}
+                        className={actionBtn}
+                        title={t.common.edit}
+                        aria-label={t.common.edit}
+                      >
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="text-muted">
+                          <path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4L16.5 3.5z" />
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => toggleActive(pr)}
+                        className={actionBtn}
+                        title={pr.is_active ? p.deactivateLabel : p.activateLabel}
+                        aria-label={pr.is_active ? p.deactivateLabel : p.activateLabel}
+                      >
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className={pr.is_active ? "text-danger" : "text-success"}>
+                          {pr.is_active ? (
+                            <path d="M18.36 6.64a9 9 0 11-12.73 0M12 2v10" />
+                          ) : (
+                            <path d="M20 6L9 17l-5-5" />
+                          )}
+                        </svg>
+                      </button>
+                      <button type="button" onClick={() => removeProduct(pr)} className={actionBtn} title={p.deactivateLabel} aria-label={p.deactivateLabel}>
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="text-muted hover:text-danger">
+                          <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
+                        </svg>
+                      </button>
+                    </div>
+                  </Td>
+                </tr>
+              ))}
+            </Table>
+            <Pagination
+              currentPage={currentPage}
+              totalPages={totalPages}
+              totalItems={filtered.length}
+              pageSize={pageSize}
+              onPageChange={setCurrentPage}
+              onPageSizeChange={setPageSize}
+            />
+          </>
         )}
       </Card>
 

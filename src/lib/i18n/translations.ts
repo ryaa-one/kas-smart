@@ -56,6 +56,16 @@ export const translations = {
       errorUnauthorized: "Anda harus login untuk mengakses halaman ini",
       errorForbidden: "Anda tidak memiliki akses untuk melakukan operasi ini",
       backToMyHome: "Kembali ke halaman saya",
+      prev: "Sebelumnya",
+      next: "Berikutnya",
+      page: "Halaman",
+      showing: "Menampilkan",
+      of: "dari",
+      data: "data",
+      perPage: "per halaman",
+      resetFilter: "Reset Filter",
+      filterStatus: "Status",
+      filterStatusAll: "Semua Status",
     },
 
     // ===== Sidebar Owner (urutan sesuai PRD) =====
@@ -198,6 +208,7 @@ export const translations = {
       subtitle: "Kelola data produk toko Anda",
       searchPlaceholder: "Cari nama / barcode produk...",
       filterAllCategories: "Semua Kategori",
+      filterAllStatus: "Semua Status",
       tableBarcode: "Barcode",
       tableProduct: "Produk",
       tableCategory: "Kategori",
@@ -259,6 +270,7 @@ export const translations = {
     kategori: {
       title: "Kategori",
       subtitle: "Kelola kategori produk agar data barang lebih terorganisir",
+      searchPlaceholder: "Cari nama kategori...",
       addTitle: "Tambah Kategori",
       editTitle: "Ubah Kategori",
       fieldName: "Nama Kategori",
@@ -274,12 +286,14 @@ export const translations = {
       errorDeleteInUse: "Kategori masih digunakan {n} produk, hapus produk tersebut terlebih dahulu",
       deleteConfirm: "Yakin ingin menghapus kategori ini?",
       empty: "Belum ada kategori. Klik Tambah Kategori untuk menambahkan.",
+      emptySearch: "Tidak ada kategori yang cocok",
     },
 
     // ===== Halaman Supplier (UC-06, FR-05) =====
     supplier: {
       title: "Supplier",
       subtitle: "Kelola data supplier sebagai sumber pembelian barang",
+      searchPlaceholder: "Cari nama / nomor telepon supplier...",
       addTitle: "Tambah Supplier",
       editTitle: "Ubah Supplier",
       fieldName: "Nama Supplier",
@@ -303,6 +317,7 @@ export const translations = {
       errorDeleteInUse: "Supplier masih digunakan {n} pembelian, hapus pembelian tersebut terlebih dahulu",
       deleteConfirm: "Yakin ingin menghapus supplier ini?",
       empty: "Belum ada supplier. Klik Tambah Supplier untuk menambahkan.",
+      emptySearch: "Tidak ada supplier yang cocok",
     },
 
     // ===== Template Struk/Invoice (M-4, FR-11/UC-14) =====
@@ -332,6 +347,7 @@ export const translations = {
       title: "Kasir",
       subtitle: "Kelola akun kasir yang dapat login ke sistem",
       searchPlaceholder: "Cari nama / username kasir...",
+      filterAllStatus: "Semua Status",
       addTitle: "Tambah Kasir",
       editTitle: "Ubah Kasir",
       fieldName: "Nama",
@@ -766,6 +782,16 @@ export const translations = {
       errorUnauthorized: "You must be logged in to access this page",
       errorForbidden: "You do not have permission to perform this operation",
       backToMyHome: "Back to my home page",
+      prev: "Previous",
+      next: "Next",
+      page: "Page",
+      showing: "Showing",
+      of: "of",
+      data: "data",
+      perPage: "per page",
+      resetFilter: "Reset Filter",
+      filterStatus: "Status",
+      filterStatusAll: "All Status",
     },
 
     nav: {
@@ -905,6 +931,7 @@ export const translations = {
       subtitle: "Manage your store products",
       searchPlaceholder: "Search product name / barcode...",
       filterAllCategories: "All Categories",
+      filterAllStatus: "All Status",
       tableBarcode: "Barcode",
       tableProduct: "Product",
       tableCategory: "Category",
@@ -966,6 +993,7 @@ export const translations = {
     kategori: {
       title: "Categories",
       subtitle: "Manage product categories to keep items organized",
+      searchPlaceholder: "Search category name...",
       addTitle: "Add Category",
       editTitle: "Edit Category",
       fieldName: "Category Name",
@@ -981,12 +1009,14 @@ export const translations = {
       errorDeleteInUse: "Category is used by {n} products, delete those products first",
       deleteConfirm: "Are you sure you want to delete this category?",
       empty: "No categories yet. Click Add Category to create one.",
+      emptySearch: "No matching categories found",
     },
 
     // ===== Halaman Supplier (UC-06, FR-05) =====
     supplier: {
       title: "Suppliers",
       subtitle: "Manage suppliers as your source of goods",
+      searchPlaceholder: "Search supplier name / phone...",
       addTitle: "Add Supplier",
       editTitle: "Edit Supplier",
       fieldName: "Supplier Name",
@@ -1010,6 +1040,7 @@ export const translations = {
       errorDeleteInUse: "Supplier is used by {n} purchases, delete those purchases first",
       deleteConfirm: "Are you sure you want to delete this supplier?",
       empty: "No suppliers yet. Click Add Supplier to create one.",
+      emptySearch: "No matching suppliers found",
     },
 
     // ===== Receipt/invoice template (M-4, FR-11/UC-14) =====
@@ -1039,6 +1070,7 @@ export const translations = {
       title: "Cashiers",
       subtitle: "Manage cashier accounts that can sign in to the system",
       searchPlaceholder: "Search cashier name / username...",
+      filterAllStatus: "All Status",
       addTitle: "Add Cashier",
       editTitle: "Edit Cashier",
       fieldName: "Name",

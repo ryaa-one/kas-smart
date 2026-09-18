@@ -14,6 +14,7 @@ import { Select } from "@/components/ui/Select";
 import { Modal } from "@/components/ui/Modal";
 import { Badge } from "@/components/ui/Badge";
 import { Table, Th, Td } from "@/components/ui/Table";
+import { Pagination } from "@/components/ui/Pagination";
 
 /** Bentuk user dari API (tanpa password/hash — dijaga server). */
 interface ApiUser {
@@ -78,6 +79,9 @@ export default function KasirCrudPage() {
 
   const [users, setUsers] = useState<ApiUser[]>([]);
   const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"" | "aktif" | "nonaktif">("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ kind: "success" | "error"; text: string } | null>(null);
@@ -122,11 +126,34 @@ export default function KasirCrudPage() {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return users;
-    return users.filter(
-      (u) => u.name.toLowerCase().includes(q) || u.username.toLowerCase().includes(q)
-    );
-  }, [users, query]);
+    return users.filter((u) => {
+      const matchSearch =
+        !q ||
+        u.name.toLowerCase().includes(q) ||
+        u.username.toLowerCase().includes(q);
+      const matchStatus = !statusFilter || u.status === statusFilter;
+      return matchSearch && matchStatus;
+    });
+  }, [users, query, statusFilter]);
+
+  // Reset ke halaman 1 saat filter atau pencarian berubah
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [query, statusFilter]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+
+  // Pastikan halaman tetap valid bila total data berkurang
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
+
+  const paginated = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filtered.slice(start, start + pageSize);
+  }, [filtered, currentPage, pageSize]);
 
   const openAdd = () => {
     setEditing(null);
@@ -245,10 +272,17 @@ export default function KasirCrudPage() {
 
   const actionBtn = "p-1.5 rounded-md hover:bg-zinc-100 transition-colors";
 
+  const hasFilter = query.trim() !== "" || statusFilter !== "";
+  const resetFilters = () => {
+    setQuery("");
+    setStatusFilter("");
+    setCurrentPage(1);
+  };
+
   return (
     <DashboardLayout title={c.title} subtitle={c.subtitle}>
       <Card>
-        <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-4">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 mb-4">
           <div className="relative flex-1 sm:max-w-xs">
             <svg
               className="absolute left-3 top-1/2 -translate-y-1/2 text-muted"
@@ -270,6 +304,28 @@ export default function KasirCrudPage() {
               className="w-full pl-9 pr-3 py-2 rounded-lg border border-line bg-white text-sm text-foreground placeholder:text-muted/60 outline-none transition-colors focus:border-primary focus:ring-2 focus:ring-primary/10"
             />
           </div>
+
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value as "" | "aktif" | "nonaktif")}
+            className="px-3 py-2 rounded-lg border border-line bg-white text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/10"
+            aria-label={t.common.filterStatus}
+          >
+            <option value="">{c.filterAllStatus || t.common.filterStatusAll}</option>
+            <option value="aktif">{t.status.active}</option>
+            <option value="nonaktif">{t.status.inactive}</option>
+          </select>
+
+          {hasFilter && (
+            <button
+              type="button"
+              onClick={resetFilters}
+              className="px-3 py-2 rounded-lg border border-dashed border-line hover:border-danger hover:text-danger text-muted text-xs font-medium transition-colors cursor-pointer self-start sm:self-auto"
+            >
+              {t.common.resetFilter}
+            </button>
+          )}
+
           <div className="sm:ml-auto">
             <Button onClick={openAdd}>
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
@@ -287,66 +343,76 @@ export default function KasirCrudPage() {
         ) : loading ? (
           <p className="text-center text-sm text-muted py-10">{t.common.loading}</p>
         ) : (
-          <Table
-            empty={query ? c.emptySearch : c.empty}
-            head={
-              <>
-                <Th>{c.tableUser}</Th>
-                <Th>{c.tableUsername}</Th>
-                <Th>{c.tablePhone}</Th>
-                <Th>{c.tableEmail}</Th>
-                <Th className="text-center">{c.tableStatus}</Th>
-                <Th className="text-right">{t.common.actions}</Th>
-              </>
-            }
-          >
-            {filtered.map((u) => (
-              <tr key={u.id} className="hover:bg-zinc-50/70">
-                <Td className="font-medium text-foreground whitespace-nowrap">{u.name}</Td>
-                <Td className="text-muted whitespace-nowrap">{u.username}</Td>
-                <Td className="text-muted tabular-nums whitespace-nowrap">{u.phone_number || "—"}</Td>
-                <Td className="text-muted max-w-xs truncate">{u.email || "—"}</Td>
-                <Td className="text-center">
-                  <Badge variant={u.status === "aktif" ? "success" : "muted"}>
-                    {u.status === "aktif" ? t.status.active : t.status.inactive}
-                  </Badge>
-                </Td>
-                <Td>
-                  <div className="flex items-center justify-end gap-1">
-                    <button
-                      type="button"
-                      onClick={() => openEdit(u)}
-                      className={actionBtn}
-                      title={t.common.edit}
-                      aria-label={t.common.edit}
-                    >
-                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="text-muted">
-                        <path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4L16.5 3.5z" />
-                      </svg>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => toggleStatus(u)}
-                      className={actionBtn}
-                      title={u.status === "aktif" ? c.deactivateLabel : c.activateLabel}
-                      aria-label={u.status === "aktif" ? c.deactivateLabel : c.activateLabel}
-                    >
-                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="text-muted">
-                        {u.status === "aktif" ? (
-                          <path d="M18.36 6.64a9 9 0 11-12.72 0M12 2v10" />
-                        ) : (
-                          <>
-                            <path d="M18.36 6.64a9 9 0 11-12.72 0" />
-                            <path d="M12 2v6M9 11h6" />
-                          </>
-                        )}
-                      </svg>
-                    </button>
-                  </div>
-                </Td>
-              </tr>
-            ))}
-          </Table>
+          <>
+            <Table
+              empty={hasFilter ? c.emptySearch : c.empty}
+              head={
+                <>
+                  <Th>{c.tableUser}</Th>
+                  <Th>{c.tableUsername}</Th>
+                  <Th>{c.tablePhone}</Th>
+                  <Th>{c.tableEmail}</Th>
+                  <Th className="text-center">{c.tableStatus}</Th>
+                  <Th className="text-right">{t.common.actions}</Th>
+                </>
+              }
+            >
+              {paginated.map((u) => (
+                <tr key={u.id} className="hover:bg-zinc-50/70">
+                  <Td className="font-medium text-foreground whitespace-nowrap">{u.name}</Td>
+                  <Td className="text-muted whitespace-nowrap">{u.username}</Td>
+                  <Td className="text-muted tabular-nums whitespace-nowrap">{u.phone_number || "—"}</Td>
+                  <Td className="text-muted max-w-xs truncate">{u.email || "—"}</Td>
+                  <Td className="text-center">
+                    <Badge variant={u.status === "aktif" ? "success" : "muted"}>
+                      {u.status === "aktif" ? t.status.active : t.status.inactive}
+                    </Badge>
+                  </Td>
+                  <Td>
+                    <div className="flex items-center justify-end gap-1">
+                      <button
+                        type="button"
+                        onClick={() => openEdit(u)}
+                        className={actionBtn}
+                        title={t.common.edit}
+                        aria-label={t.common.edit}
+                      >
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="text-muted">
+                          <path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4L16.5 3.5z" />
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => toggleStatus(u)}
+                        className={actionBtn}
+                        title={u.status === "aktif" ? c.deactivateLabel : c.activateLabel}
+                        aria-label={u.status === "aktif" ? c.deactivateLabel : c.activateLabel}
+                      >
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="text-muted">
+                          {u.status === "aktif" ? (
+                            <path d="M18.36 6.64a9 9 0 11-12.72 0M12 2v10" />
+                          ) : (
+                            <>
+                              <path d="M18.36 6.64a9 9 0 11-12.72 0" />
+                              <path d="M12 2v6M9 11h6" />
+                            </>
+                          )}
+                        </svg>
+                      </button>
+                    </div>
+                  </Td>
+                </tr>
+              ))}
+            </Table>
+            <Pagination
+              currentPage={currentPage}
+              totalPages={totalPages}
+              totalItems={filtered.length}
+              pageSize={pageSize}
+              onPageChange={setCurrentPage}
+              onPageSizeChange={setPageSize}
+            />
+          </>
         )}
       </Card>
 
