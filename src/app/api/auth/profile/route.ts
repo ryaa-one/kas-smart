@@ -48,7 +48,7 @@ export async function PATCH(request: Request) {
   if (body.email !== undefined) {
     const v = typeof body.email === "string" ? body.email.trim() : "";
     if (v && !EMAIL_RE.test(v)) return fail(400, "email_invalid");
-    data.email = v || null; // K3: kosong = NULL (multi-NULL ok)
+    data.email = v ? v.toLowerCase() : null; // K3: kosong = NULL (multi-NULL ok)
   }
   if (body.password !== undefined && body.password !== "") {
     const newPw = typeof body.password === "string" ? body.password : "";
@@ -64,7 +64,10 @@ export async function PATCH(request: Request) {
 
   if (data.email) {
     const dupe = await prisma.user.findFirst({
-      where: { email: data.email, id: { not: current.id } },
+      where: {
+        email: { equals: data.email, mode: "insensitive" },
+        id: { not: current.id },
+      },
       select: { id: true },
     });
     if (dupe) return fail(409, "email_taken");

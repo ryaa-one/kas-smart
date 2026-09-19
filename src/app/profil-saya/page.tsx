@@ -26,7 +26,7 @@ interface ProfileForm {
 // (PATCH /api/auth/profile) — hash tidak pernah keluar dari server.
 export default function ProfilSayaPage() {
   const { t } = useLang();
-  const { user } = useAuth();
+  const { user, refreshUser } = useAuth();
 
   const [form, setForm] = useState<ProfileForm>({
     name: user?.name ?? "",
@@ -39,6 +39,11 @@ export default function ProfilSayaPage() {
   const [errors, setErrors] = useState<Partial<Record<keyof ProfileForm | "general", string>>>({});
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+
+  // Ambil data terbaru langsung dari database (/api/auth/me) saat halaman dibuka.
+  useEffect(() => {
+    refreshUser();
+  }, []);
 
   // Sinkronkan form saat sesi pulih dari /me (refresh halaman).
   useEffect(() => {
@@ -99,7 +104,11 @@ export default function ProfilSayaPage() {
                 ? t.profil.errorCurrentPasswordRequired
                 : code === "email_taken"
                   ? t.kasirAkun.errorEmailTaken
-                  : t.kasirAkun.errorLoad,
+                  : code === "name_required"
+                    ? t.profil.errorNameRequired
+                    : code === "password_min_8"
+                      ? t.profil.errorPasswordMin
+                      : t.kasirAkun.errorLoad,
         });
         return;
       }
@@ -109,7 +118,16 @@ export default function ProfilSayaPage() {
         "profileChange",
         "Perbarui profil saya"
       );
-      setForm((f) => ({ ...f, currentPassword: "", password: "", confirm: "" }));
+      await refreshUser();
+      setForm((f) => ({
+        ...f,
+        name: json?.data?.user?.name ?? form.name.trim(),
+        phone: json?.data?.user?.phone_number ?? form.phone.trim(),
+        email: json?.data?.user?.email ?? form.email.trim(),
+        currentPassword: "",
+        password: "",
+        confirm: "",
+      }));
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
     } catch {

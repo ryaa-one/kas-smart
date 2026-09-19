@@ -59,6 +59,7 @@ interface AuthContextType {
     password: string
   ) => Promise<LoginResult>;
   logout: () => Promise<void>;
+  refreshUser: () => Promise<void>;
   hydrated: boolean; // false sampai GET /api/auth/me pertama selesai
 }
 
@@ -133,6 +134,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // gagal network — state lokal tetap dibersihkan
         }
         setUser(null);
+      },
+      refreshUser: async () => {
+        try {
+          const res = await fetch("/api/auth/me", { credentials: "same-origin" });
+          if (res.status === 200) {
+            const json = (await res.json()) as { data?: { user?: ApiUser } };
+            if (json.data?.user) setUser(toAuthUser(json.data.user));
+          }
+        } catch {
+          // server mati/ offline — abaikan
+        }
       },
       hydrated,
     }),
