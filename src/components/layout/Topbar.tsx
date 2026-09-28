@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useLang } from "@/lib/i18n/LanguageContext";
 import { useAuth } from "@/lib/auth";
 import { LanguageSwitcher } from "@/components/ui/LanguageSwitcher";
@@ -7,6 +8,8 @@ import { LanguageSwitcher } from "@/components/ui/LanguageSwitcher";
 export function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
   const { t } = useLang();
   const { user } = useAuth();
+
+  const profileHref = user?.role === "Kasir" ? "/kasir/profil-saya" : "/profil-saya";
 
   return (
     <header className="sticky top-0 z-20 bg-white/90 backdrop-blur border-b border-line">
@@ -51,12 +54,14 @@ export function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
           <LanguageSwitcher />
         </div>
 
-        <div
+        <Link
+          href={profileHref}
           className="w-9 h-9 rounded-full bg-primary text-white flex items-center justify-center text-sm font-bold shrink-0"
           title={user?.name}
+          aria-label={t.nav?.profilSaya ?? "Profil Saya"}
         >
           {(user?.name ?? "O").charAt(0).toUpperCase()}
-        </div>
+        </Link>
       </div>
     </header>
   );

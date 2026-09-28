@@ -1,7 +1,7 @@
 // /api/products/[id] — UC-04 detail/ubah/nonaktifkan.
 // PATCH  (Owner) : ubah field produk (validasi sama dengan create; patch parsial).
-// DELETE (Owner) : SOFT DELETE — is_active=false, BUKAN hapus fisik, karena
-//                  sale_details/purchase_details/stock_adjustment_details FK ke produk.
+// DELETE (Owner) : HARD DELETE — cek relasi sale_details, purchase_details,
+//                  stock_adjustment_details (409 bila ada); hapus fisik jika 0.
 import { prisma } from "@/lib/prisma";
 import { fail, ok, requireOwner } from "@/lib/api-auth";
 import {
@@ -93,23 +93,70 @@ export async function DELETE(
 
   const { id } = await params;
   if (badId(id)) return fail(404, "product_not_found");
-  const current = await prisma.product.findUnique({ where: { id } });
-  if (!current) return fail(404, "product_not_found");
 
-  // PRD UC-04: produk tidak dihapus permanen — nonaktifkan (is_active=false).
-  const updated = await prisma.product.update({
+  const product = await prisma.product.findUnique({
     where: { id },
-    data: { is_active: false },
-    include: PRODUCT_INCLUDE,
-  });
-  if (current.is_active) {
-    await prisma.activityLog.create({
-      data: {
-        user_id: guard.id,
-        action: "productDeactivate",
-        description: `Nonaktifkan produk ${updated.name}`,
+    include: {
+      _count: {
+        select: {
+          saleDetails: true,
+          purchaseDetails: true,
+          stockAdjustmentDetails: true,
+        },
       },
+    },
+  });
+  if (!product) return fail(404, "product_not_found");
+
+  const salesCount = product._count.saleDetails;
+  const purchaseCount = product._count.purchaseDetails;
+  const adjustmentCount = product._count.stockAdjustmentDetails;
+
+  // Cek ketiga tabel relasi riwayat: jika salah satu > 0, tolak dengan 409
+  if (salesCount > 0 || purchaseCount > 0 || adjustmentCount > 0) {
+    let errorCode = "product_in_use";
+    let message = "Produk masih digunakan dalam data transaksi dan tidak dapat dihapus.";
+    if (salesCount > 0) {
+      errorCode = "product_in_use_sales";
+      message = "Produk masih digunakan dalam riwayat transaksi penjualan.";
+    } else if (purchaseCount > 0) {
+      errorCode = "product_in_use_purchases";
+      message = "Produk masih digunakan dalam riwayat transaksi pembelian.";
+    } else if (adjustmentCount > 0) {
+      errorCode = "product_in_use_adjustments";
+      message = "Produk masih digunakan dalam riwayat penyesuaian stok.";
+    }
+
+    return fail(409, errorCode, {
+      message,
+      sales_count: salesCount,
+      purchase_count: purchaseCount,
+      adjustment_count: adjustmentCount,
     });
   }
-  return ok({ product: serializeProduct(updated), deactivated: true });
+
+  // Hard delete dari database
+  try {
+    await prisma.product.delete({
+      where: { id },
+    });
+  } catch (e: unknown) {
+    if ((e as { code?: string })?.code === "P2003") {
+      return fail(409, "product_in_use", {
+        message: "Produk masih digunakan dalam data transaksi lain dan tidak dapat dihapus.",
+      });
+    }
+    throw e;
+  }
+
+  // Catat activity log setelah hard delete berhasil
+  await prisma.activityLog.create({
+    data: {
+      user_id: guard.id,
+      action: "productDelete",
+      description: `Hapus produk ${product.name}`,
+    },
+  });
+
+  return ok({ deleted: true, id: product.id });
 }

@@ -1,14 +1,15 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { useLang } from "@/lib/i18n/LanguageContext";
 import { useAuth } from "@/lib/auth";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Card } from "@/components/ui/Card";
 import { StatCard } from "@/components/ui/StatCard";
 import { BarChart } from "@/components/dashboard/BarChart";
+import { DASHBOARD_CHARTS_CONFIG, type DashboardChartPoint } from "@/components/dashboard/chart-config";
 import { useDb, isSaleCompleted, cashierUsers, activityLabelAction } from "@/lib/mock/db";
-import type { ChartPoint } from "@/lib/mock/dashboard";
+import type { PurchaseData } from "@/lib/purchase-api";
 
 // FR-01: ringkasan penjualan, profit, stok, hutang, grafik, aktivitas —
 // semuanya DIHITUNG dari store bersama (C-3), bukan mock statis per halaman.
@@ -78,11 +79,79 @@ export default function DashboardPage() {
       const i = inWeek(p.purchase_date);
       if (i >= 0) buckets[i].purchase += p.details.reduce((x, d) => x + d.quantity * d.unit_purchase_price, 0);
     }
-    const salesChart: ChartPoint[] = buckets.map((b) => ({ label: "", value: b.sales / 1e6 }));
-    const purchaseChart: ChartPoint[] = buckets.map((b) => ({ label: "", value: b.purchase / 1e6 }));
-    const profitChart: ChartPoint[] = buckets.map((b) => ({ label: "", value: (b.sales - b.purchase) / 1e6 }));
+    const salesChart: DashboardChartPoint[] = buckets.map((b, i) => ({
+      day: t.dashboard.weekDays[i] ?? `H${i + 1}`,
+      value: Number((b.sales / 1e6).toFixed(2)),
+      rawAmount: b.sales,
+    }));
+    const purchaseChart: DashboardChartPoint[] = buckets.map((b, i) => ({
+      day: t.dashboard.weekDays[i] ?? `H${i + 1}`,
+      value: Number((b.purchase / 1e6).toFixed(2)),
+      rawAmount: b.purchase,
+    }));
+    const profitChart: DashboardChartPoint[] = buckets.map((b, i) => ({
+      day: t.dashboard.weekDays[i] ?? `H${i + 1}`,
+      value: Number(((b.sales - b.purchase) / 1e6).toFixed(2)),
+      rawAmount: b.sales - b.purchase,
+    }));
     return { salesChart, profitChart, purchaseChart };
-  }, [db.sales, db.purchases]);
+  }, [db.sales, db.purchases, t.dashboard.weekDays]);
+
+  // Data pembelian dari backend database (/api/purchases) khusus untuk Grafik Pembelian
+  const [backendPurchases, setBackendPurchases] = useState<PurchaseData[]>([]);
+
+  useEffect(() => {
+    let active = true;
+    async function loadBackendPurchases() {
+      try {
+        const res = await fetch("/api/purchases");
+        if (!res.ok) return;
+        const json = await res.json();
+        if (active && json?.data?.purchases && Array.isArray(json.data.purchases)) {
+          setBackendPurchases(json.data.purchases);
+        }
+      } catch (err) {
+        console.error("Gagal memuat data pembelian dari backend:", err);
+      }
+    }
+    loadBackendPurchases();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Agregasi mingguan (Senin–Minggu) data pembelian dari backend database untuk Grafik Pembelian
+  const backendPurchaseChart = useMemo(() => {
+    const now = new Date();
+    const monday = new Date(now);
+    const dow = (now.getDay() + 6) % 7; // 0 = Senin
+    monday.setDate(now.getDate() - dow);
+    monday.setHours(0, 0, 0, 0);
+
+    const buckets = Array.from({ length: 7 }, () => 0);
+    const inWeek = (iso: string) => {
+      const d = new Date(iso);
+      const diff = Math.floor((d.getTime() - monday.getTime()) / 86400000);
+      return diff >= 0 && diff < 7 ? diff : -1;
+    };
+
+    for (const p of backendPurchases) {
+      const i = inWeek(p.purchase_date);
+      if (i >= 0) {
+        const total = typeof p.total === "number"
+          ? p.total
+          : p.details?.reduce((sum, d) => sum + d.quantity * d.unit_purchase_price, 0) ?? 0;
+        buckets[i] += total;
+      }
+    }
+
+    const points: DashboardChartPoint[] = buckets.map((total, i) => ({
+      day: t.dashboard.weekDays[i] ?? `H${i + 1}`,
+      value: Number((total / 1e6).toFixed(2)),
+      rawAmount: total,
+    }));
+    return points;
+  }, [backendPurchases, t.dashboard.weekDays]);
 
   // Stok menipis dari PRODUCTS store (stok <= minimum_stock, aktif).
   const lowStock = useMemo(
@@ -148,19 +217,34 @@ export default function DashboardPage() {
         />
       </div>
 
-      {/* Charts Row */}
+      {/* Charts Row (Recharts BarChart dengan config terpisah) */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-6">
         <Card>
           <h3 className="text-sm font-semibold text-foreground mb-4">{t.dashboard.salesChartTitle}</h3>
-          <BarChart data={weekAgg.salesChart} color="bg-primary" />
+          <BarChart
+            data={weekAgg.salesChart}
+            color={DASHBOARD_CHARTS_CONFIG.sales.color}
+            unit={DASHBOARD_CHARTS_CONFIG.sales.unit}
+            height={DASHBOARD_CHARTS_CONFIG.sales.height}
+          />
         </Card>
         <Card>
           <h3 className="text-sm font-semibold text-foreground mb-4">{t.dashboard.profitChartTitle}</h3>
-          <BarChart data={weekAgg.profitChart} color="bg-success" />
+          <BarChart
+            data={weekAgg.profitChart}
+            color={DASHBOARD_CHARTS_CONFIG.profit.color}
+            unit={DASHBOARD_CHARTS_CONFIG.profit.unit}
+            height={DASHBOARD_CHARTS_CONFIG.profit.height}
+          />
         </Card>
         <Card>
           <h3 className="text-sm font-semibold text-foreground mb-4">{t.dashboard.purchaseChartTitle}</h3>
-          <BarChart data={weekAgg.purchaseChart} color="bg-amber-500" />
+          <BarChart
+            data={backendPurchaseChart}
+            color={DASHBOARD_CHARTS_CONFIG.purchase.color}
+            unit={DASHBOARD_CHARTS_CONFIG.purchase.unit}
+            height={DASHBOARD_CHARTS_CONFIG.purchase.height}
+          />
         </Card>
       </div>
 

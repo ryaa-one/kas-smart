@@ -91,6 +91,10 @@ export default function ProdukPage() {
       case "minimum_stock_invalid": return p.errorStockNegative;
       case "barcode_taken": return p.errorBarcodeDuplicate;
       case "barcode_invalid": return p.errorBarcodeInvalid;
+      case "product_in_use": return p.errorDeleteInUse;
+      case "product_in_use_sales": return p.errorDeleteInUseSales;
+      case "product_in_use_purchases": return p.errorDeleteInUsePurchases;
+      case "product_in_use_adjustments": return p.errorDeleteInUseAdjustments;
       default: return p.errorLoad;
     }
   };
@@ -279,10 +283,30 @@ export default function ProdukPage() {
       });
       if (res.ok) {
         await refresh();
-        setToast({ kind: "success", text: p.successDeactivated });
+        setToast({ kind: "success", text: p.successDeleted || "Produk berhasil dihapus" });
       } else {
-        const json = (await res.json().catch(() => null)) as { error?: string } | null;
-        setToast({ kind: "error", text: msg(json?.error ?? "server") });
+        const json = (await res.json().catch(() => null)) as {
+          error?: string;
+          message?: string;
+        } | null;
+        if (res.status === 409) {
+          const errCode = json?.error;
+          let text = p.errorDeleteInUse;
+          if (errCode === "product_in_use_sales") {
+            text = p.errorDeleteInUseSales;
+          } else if (errCode === "product_in_use_purchases") {
+            text = p.errorDeleteInUsePurchases;
+          } else if (errCode === "product_in_use_adjustments") {
+            text = p.errorDeleteInUseAdjustments;
+          } else if (json?.message) {
+            text = json.message;
+          }
+          setToast({ kind: "error", text: text || p.errorDeleteInUse });
+        } else if (res.status === 403) {
+          setToast({ kind: "error", text: t.common.forbidden || "Tidak diizinkan" });
+        } else {
+          setToast({ kind: "error", text: msg(json?.error ?? "server") });
+        }
       }
     } catch {
       setToast({ kind: "error", text: p.errorLoad });
@@ -463,7 +487,7 @@ export default function ProdukPage() {
                           )}
                         </svg>
                       </button>
-                      <button type="button" onClick={() => removeProduct(pr)} className={actionBtn} title={p.deactivateLabel} aria-label={p.deactivateLabel}>
+                      <button type="button" onClick={() => removeProduct(pr)} className={actionBtn} title={t.common.delete} aria-label={t.common.delete}>
                         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="text-muted hover:text-danger">
                           <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
                         </svg>
