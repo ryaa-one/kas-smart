@@ -107,21 +107,32 @@ export default function KasirPage() {
     }
   };
 
-  const fetchCustomers = async () => {
-    try {
-      const res = await fetch("/api/customers");
-      const json = await res.json();
-      if (res.ok && json.ok && Array.isArray(json.data?.customers)) {
-        setCustomers(json.data.customers);
-      }
-    } catch (e) {
-      console.error("Gagal mengambil data pelanggan:", e);
-    }
-  };
-
   useEffect(() => {
-    fetchProducts();
-    fetchCustomers();
+    let active = true;
+    async function initData() {
+      try {
+        const [prodRes, custRes] = await Promise.all([
+          fetch("/api/products"),
+          fetch("/api/customers"),
+        ]);
+        const prodJson = await prodRes.json();
+        const custJson = await custRes.json();
+        if (active) {
+          if (prodRes.ok && prodJson.ok && Array.isArray(prodJson.data?.products)) {
+            setProducts(prodJson.data.products);
+          }
+          if (custRes.ok && custJson.ok && Array.isArray(custJson.data?.customers)) {
+            setCustomers(custJson.data.customers);
+          }
+        }
+      } catch (e) {
+        console.error("Gagal mengambil data awal kasir:", e);
+      }
+    }
+    initData();
+    return () => {
+      active = false;
+    };
   }, []);
 
   // Auto-hide feedback hasil scan (produk masuk / tidak ditemukan).
@@ -256,8 +267,8 @@ export default function KasirPage() {
     setScanFeedback({ kind: "success", text: t.kasir.scanAdded.replace("{code}", product.name) });
   };
 
-  // Lanjut ke pembayaran
-  const proceedToPayment = () => {
+  // Lanjut ke pembayaran & simpan draft ke database (status: DRAFT, stok belum berkurang)
+  const proceedToPayment = async () => {
     if (cart.length === 0) return;
     setStage("payment");
     setMethod(null);
@@ -267,6 +278,27 @@ export default function KasirPage() {
     setCustomerQuery("");
     setJustAdded(false);
     setStockError(false);
+
+    try {
+      const res = await fetch("/api/sales", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sale_id: saleId || null,
+          items: cart.map((i) => ({
+            product_id: i.product.id,
+            quantity: i.quantity,
+          })),
+          status: "draft",
+        }),
+      });
+      const json = await res.json();
+      if (res.ok && json.ok && json.data?.sale?.id) {
+        setSaleId(json.data.sale.id);
+      }
+    } catch (e) {
+      console.error("Gagal menyimpan draft penjualan:", e);
+    }
   };
 
   const finishStage = (sale: SerializedSale, s: Stage) => {
@@ -291,6 +323,7 @@ export default function KasirPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          sale_id: saleId || null,
           items: cart.map((i) => ({
             product_id: i.product.id,
             quantity: i.quantity,
@@ -298,6 +331,7 @@ export default function KasirPage() {
           payment_method: method,
           customer_id: method === "debt" ? customerId : (customerId || null),
           amount_paid: method === "cash" ? cashNum : null,
+          status: "completed",
         }),
       });
 
@@ -324,9 +358,20 @@ export default function KasirPage() {
     }
   };
 
-  // Pembatalan QRIS menunggu → status cancelled, stok tidak berkurang (UC-12).
-  const cancelQris = () => {
+  // Pembatalan QRIS menunggu → panggil cancel di server, status dibatalkan, stok tidak berkurang (UC-12).
+  const cancelQris = async () => {
     if (!window.confirm(t.kasir.cancelConfirm)) return;
+    if (saleId) {
+      try {
+        await fetch(`/api/sales/${saleId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "cancel" }),
+        });
+      } catch (e) {
+        console.error("Gagal membatalkan transaksi di server:", e);
+      }
+    }
     setStage("cancelled");
     setSaleId("");
   };
@@ -348,10 +393,34 @@ export default function KasirPage() {
     return (
       <button
         type="button"
-        onClick={() => {
+        onClick={async () => {
           setMethod(m);
           setCustomerError(false);
           setStockError(false);
+          // Bila kasir memilih QRIS, simpan status Menunggu Pembayaran ke server (tanpa memotong stok)
+          if (m === "qris") {
+            try {
+              const res = await fetch("/api/sales", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  sale_id: saleId || null,
+                  items: cart.map((i) => ({
+                    product_id: i.product.id,
+                    quantity: i.quantity,
+                  })),
+                  payment_method: "qris",
+                  status: "waiting_payment",
+                }),
+              });
+              const json = await res.json();
+              if (res.ok && json.ok && json.data?.sale?.id) {
+                setSaleId(json.data.sale.id);
+              }
+            } catch (e) {
+              console.error("Gagal memperbarui status menunggu QRIS:", e);
+            }
+          }
         }}
         className={`flex flex-col items-center gap-2 p-4 rounded-xl border-2 transition-colors ${
           active

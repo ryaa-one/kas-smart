@@ -40,6 +40,8 @@ export function RiwayatView({ mineOnly = false }: { mineOnly?: boolean }) {
   const [pageSize, setPageSize] = useState(10);
   const [totalItems, setTotalItems] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [cancelling, setCancelling] = useState(false);
 
   const [detail, setDetail] = useState<SerializedSale | null>(null);
   const [receipt, setReceipt] = useState<SerializedSale | null>(null);
@@ -107,7 +109,7 @@ export function RiwayatView({ mineOnly = false }: { mineOnly?: boolean }) {
     return () => {
       active = false;
     };
-  }, [page, pageSize, debouncedQuery, from, to, method, status, mineOnly, user?.id]);
+  }, [page, pageSize, debouncedQuery, from, to, method, status, mineOnly, user?.id, refreshTrigger]);
 
   const handleOpenDetail = async (item: SerializedSale) => {
     setDetail(item);
@@ -121,6 +123,37 @@ export function RiwayatView({ mineOnly = false }: { mineOnly?: boolean }) {
       }
     } catch (err) {
       console.error("Gagal memuat detail transaksi:", err);
+    }
+  };
+
+  const handleCancelSale = async (saleItem: SerializedSale) => {
+    if (
+      !window.confirm(
+        "Apakah Anda yakin ingin membatalkan transaksi ini? Stok produk akan dikembalikan ke inventaris toko."
+      )
+    ) {
+      return;
+    }
+    setCancelling(true);
+    try {
+      const res = await fetch(`/api/sales/${saleItem.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "cancel" }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) {
+        alert(json.error || "Gagal membatalkan transaksi");
+        return;
+      }
+      alert("Transaksi berhasil dibatalkan dan stok produk telah dikembalikan.");
+      setDetail(null);
+      setRefreshTrigger((k) => k + 1);
+    } catch (err) {
+      console.error("Gagal membatalkan transaksi:", err);
+      alert("Terjadi kesalahan jaringan.");
+    } finally {
+      setCancelling(false);
     }
   };
 
@@ -320,6 +353,18 @@ export function RiwayatView({ mineOnly = false }: { mineOnly?: boolean }) {
         title={`${t.riwayat.detailTitle} — ${detail?.invoice_number ?? ""}`}
         footer={
           <>
+            {detail &&
+              detail.status.toLowerCase() !== "dibatalkan" &&
+              detail.status.toLowerCase() !== "cancelled" &&
+              (user?.role === "Owner" || detail.user_id === user?.id) && (
+                <Button
+                  variant="danger"
+                  disabled={cancelling}
+                  onClick={() => handleCancelSale(detail)}
+                >
+                  {cancelling ? "Membatalkan..." : "Batalkan Transaksi"}
+                </Button>
+              )}
             {detail && (detail.status.toLowerCase() === "lunas" || detail.status.toLowerCase() === "paid" || detail.status.toLowerCase() === "hutang" || detail.status.toLowerCase() === "debt") && (
               <Button variant="secondary" onClick={() => setReceipt(detail)}>
                 {t.struk.print}

@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { requireOwner, ok, fail } from "@/lib/api-auth";
 import { prisma } from "@/lib/prisma";
+import { SaleStatus } from "@/generated/prisma/enums";
 import type { ReportTab, ReportResponseData } from "@/lib/report-api";
 
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
@@ -37,7 +38,7 @@ export async function GET(req: NextRequest) {
     if (tab === "sales") {
       const sales = await prisma.salesTransaction.findMany({
         where: {
-          status: { not: "DIBATALKAN" },
+          status: { in: [SaleStatus.LUNAS, SaleStatus.HUTANG] },
           ...(hasDateFilter ? { transaction_date: dateFilter } : {}),
         },
         include: {
@@ -107,7 +108,7 @@ export async function GET(req: NextRequest) {
     else if (tab === "profit") {
       const sales = await prisma.salesTransaction.findMany({
         where: {
-          status: { not: "DIBATALKAN" },
+          status: { in: [SaleStatus.LUNAS, SaleStatus.HUTANG] },
           ...(hasDateFilter ? { transaction_date: dateFilter } : {}),
         },
         include: {

@@ -6,10 +6,12 @@ export interface CreateSaleItemInput {
 }
 
 export interface CreateSaleInput {
+  sale_id?: string | null;
   items: CreateSaleItemInput[];
-  payment_method: "cash" | "qris" | "debt";
+  payment_method?: "cash" | "qris" | "debt" | null;
   customer_id?: string | null;
   amount_paid?: number | null;
+  status?: "draft" | "waiting_payment" | "completed" | null;
 }
 
 export interface SerializedSaleDetail {
@@ -88,7 +90,27 @@ export function validateCreateSaleInput(body: unknown): {
     return { valid: false, status: 400, code: "invalid_body" };
   }
 
-  const raw = body as Partial<CreateSaleInput> & { payment_method?: string };
+  const raw = body as Partial<CreateSaleInput> & { payment_method?: string; status?: string };
+
+  // Normalisasi status transaksi: draft | waiting_payment | completed
+  let status: "draft" | "waiting_payment" | "completed" = "completed";
+  if (raw.status) {
+    const s = String(raw.status).toLowerCase();
+    if (s === "draft") {
+      status = "draft";
+    } else if (
+      s === "waiting_payment" ||
+      s === "menunggu_pembayaran" ||
+      s === "menunggu pembayaran" ||
+      s === "qris_waiting"
+    ) {
+      status = "waiting_payment";
+    } else if (s === "completed" || s === "lunas" || s === "hutang" || s === "selesai") {
+      status = "completed";
+    }
+  }
+
+  const sale_id = typeof raw.sale_id === "string" && raw.sale_id.trim() ? raw.sale_id.trim() : null;
 
   // Validasi payment_method
   let method: "cash" | "qris" | "debt" | null = null;
@@ -97,7 +119,12 @@ export function validateCreateSaleInput(body: unknown): {
   else if (pm === "qris") method = "qris";
   else if (pm === "debt" || pm === "hutang") method = "debt";
 
-  if (!method) {
+  if (status === "waiting_payment") {
+    method = "qris";
+  } else if (status === "draft") {
+    // Pada status draft, payment_method opsional; default ke cash bila belum dipilih
+    if (!method) method = "cash";
+  } else if (!method) {
     return { valid: false, status: 400, code: "payment_method_invalid" };
   }
 
@@ -130,10 +157,10 @@ export function validateCreateSaleInput(body: unknown): {
   let customer_id: string | null = null;
   if (method === "debt") {
     const cid = typeof raw.customer_id === "string" ? raw.customer_id.trim() : "";
-    if (!cid) {
+    if (status === "completed" && !cid) {
       return { valid: false, status: 400, code: "customer_required" };
     }
-    customer_id = cid;
+    customer_id = cid || null;
   } else if (typeof raw.customer_id === "string" && raw.customer_id.trim()) {
     customer_id = raw.customer_id.trim();
   }
@@ -141,20 +168,29 @@ export function validateCreateSaleInput(body: unknown): {
   // Validasi khusus tunai
   let amount_paid: number | null = null;
   if (method === "cash") {
-    const ap = Number(raw.amount_paid);
-    if (!Number.isFinite(ap) || ap < 0) {
-      return { valid: false, status: 400, code: "amount_paid_invalid" };
+    if (status === "completed") {
+      const ap = Number(raw.amount_paid);
+      if (!Number.isFinite(ap) || ap < 0) {
+        return { valid: false, status: 400, code: "amount_paid_invalid" };
+      }
+      amount_paid = Math.floor(ap);
+    } else if (raw.amount_paid !== undefined && raw.amount_paid !== null) {
+      const ap = Number(raw.amount_paid);
+      if (Number.isFinite(ap) && ap >= 0) {
+        amount_paid = Math.floor(ap);
+      }
     }
-    amount_paid = Math.floor(ap);
   }
 
   return {
     valid: true,
     data: {
+      sale_id,
       items,
       payment_method: method,
       customer_id,
       amount_paid,
+      status,
     },
   };
 }

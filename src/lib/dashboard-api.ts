@@ -95,6 +95,8 @@ export function formatActivityAction(action: string): string {
     case "profileChange":
     case "profileUpdate":
       return "Mengubah profil";
+    case "saleCancel":
+      return "Membatalkan transaksi";
     default:
       return action;
   }

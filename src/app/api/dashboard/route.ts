@@ -1,5 +1,6 @@
 import { requireLogin, ok, fail } from "@/lib/api-auth";
 import { prisma } from "@/lib/prisma";
+import { SaleStatus } from "@/generated/prisma/enums";
 import { formatActivityAction } from "@/lib/dashboard-api";
 import type { DashboardChartPoint } from "@/components/dashboard/chart-config";
 
@@ -18,7 +19,7 @@ export async function GET() {
     const todaySales = await prisma.salesTransaction.findMany({
       where: {
         user_id: session.id,
-        status: { not: "DIBATALKAN" },
+        status: { in: [SaleStatus.LUNAS, SaleStatus.HUTANG] },
         transaction_date: { gte: startOfDay, lte: endOfDay },
       },
       select: { total: true },
@@ -65,7 +66,7 @@ export async function GET() {
     // Stat 1: Penjualan & Profit Hari Ini
     const todaySales = await prisma.salesTransaction.findMany({
       where: {
-        status: { not: "DIBATALKAN" },
+        status: { in: [SaleStatus.LUNAS, SaleStatus.HUTANG] },
         transaction_date: { gte: startOfDay, lte: endOfDay },
       },
       include: {
@@ -124,7 +125,7 @@ export async function GET() {
 
     const weekSales = await prisma.salesTransaction.findMany({
       where: {
-        status: { not: "DIBATALKAN" },
+        status: { in: [SaleStatus.LUNAS, SaleStatus.HUTANG] },
         transaction_date: { gte: monday, lt: nextMonday },
       },
       include: {
