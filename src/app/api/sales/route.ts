@@ -231,6 +231,14 @@ export async function POST(req: NextRequest) {
       }
 
       const result = await prisma.$transaction(async (tx) => {
+        if (customer_id) {
+          const lockedCustomer = await tx.$queryRaw<Array<{ id: string }>>`
+            SELECT id FROM customers WHERE id = ${customer_id} FOR SHARE
+          `;
+          if (lockedCustomer.length === 0) {
+            throw new SaleError(404, "customer_not_found");
+          }
+        }
         if (sale_id) {
           const existing = await tx.salesTransaction.findUnique({
             where: { sale_id },
@@ -303,7 +311,10 @@ export async function POST(req: NextRequest) {
       });
 
       return ok({ sale: serializeSale(result) }, 201);
-    } catch (err) {
+    } catch (err: unknown) {
+      if (err instanceof SaleError) {
+        return fail(err.status, err.code, err.extra);
+      }
       console.error("Draft transaction failed:", err);
       return fail(500, "internal_server_error");
     }
@@ -335,6 +346,14 @@ export async function POST(req: NextRequest) {
       }
 
       const result = await prisma.$transaction(async (tx) => {
+        if (customer_id) {
+          const lockedCustomer = await tx.$queryRaw<Array<{ id: string }>>`
+            SELECT id FROM customers WHERE id = ${customer_id} FOR SHARE
+          `;
+          if (lockedCustomer.length === 0) {
+            throw new SaleError(404, "customer_not_found");
+          }
+        }
         if (sale_id) {
           const existing = await tx.salesTransaction.findUnique({
             where: { sale_id },
@@ -405,7 +424,10 @@ export async function POST(req: NextRequest) {
       });
 
       return ok({ sale: serializeSale(result) }, 201);
-    } catch (err) {
+    } catch (err: unknown) {
+      if (err instanceof SaleError) {
+        return fail(err.status, err.code, err.extra);
+      }
       console.error("Waiting payment transaction failed:", err);
       return fail(500, "internal_server_error");
     }
@@ -497,6 +519,16 @@ export async function POST(req: NextRequest) {
 
   try {
     const result = await prisma.$transaction(async (tx) => {
+      // Kunci baris customer dengan FOR SHARE jika customer_id digunakan agar aman dari race condition DELETE customer
+      if (customer_id) {
+        const lockedCustomer = await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT id FROM customers WHERE id = ${customer_id} FOR SHARE
+        `;
+        if (lockedCustomer.length === 0) {
+          throw new SaleError(404, "customer_not_found");
+        }
+      }
+
       // KUNCI IDEMPOTENCY DI DALAM TRANSAKSI DENGAN ROW LOCK:
       if (sale_id) {
         const locked = await tx.$queryRaw<Array<{ sale_id: string; status: string }>>`
@@ -672,6 +704,14 @@ export async function POST(req: NextRequest) {
   } catch (err: unknown) {
     if (err instanceof SaleError) {
       return fail(err.status, err.code, err.extra);
+    }
+    if (
+      err &&
+      typeof err === "object" &&
+      "code" in err &&
+      (err as { code?: string }).code === "P2003"
+    ) {
+      return fail(404, "customer_not_found");
     }
     console.error("Sale transaction failed:", err);
     return fail(500, "internal_server_error");

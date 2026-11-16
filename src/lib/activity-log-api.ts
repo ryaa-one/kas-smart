@@ -44,6 +44,10 @@ export function getActivityActionColor(action: string): string {
     case "supplierUpdate":
     case "supplierDelete":
     case "customerAdd":
+    case "customerCreate":
+    case "customerUpdate":
+    case "customerEdit":
+    case "customerDelete":
     case "cashierAdd":
     case "cashierEdit":
     case "cashierDeactivate":

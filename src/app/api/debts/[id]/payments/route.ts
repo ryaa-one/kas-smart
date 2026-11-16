@@ -67,6 +67,15 @@ export async function POST(
   try {
     const result = await prisma.$transaction(
       async (tx) => {
+        // Kunci baris sales_transactions terlebih dahulu (urutan lock konsisten dengan PATCH /api/sales/[id] untuk cegah deadlock)
+        const lockedSale = await tx.$queryRaw<
+          Array<{ sale_id: string; status: string }>
+        >`SELECT sale_id, status FROM sales_transactions WHERE sale_id = ${debt.sale_id} FOR UPDATE`;
+
+        if (!lockedSale[0] || lockedSale[0].status === "Dibatalkan") {
+          throw new DebtError(409, "sale_cancelled");
+        }
+
         // Kunci baris dengan FOR UPDATE di dalam transaksi untuk mencegah race condition (Section 14)
         const locked = await tx.$queryRaw<
           Array<{

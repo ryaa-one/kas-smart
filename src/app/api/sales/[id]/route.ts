@@ -93,16 +93,9 @@ export async function PATCH(
     return ok({ sale: serializeSale(sale) });
   }
 
-  // Jika transaksi hutang dan sudah ada pembayaran cicilan, tolak pembatalan agar tidak merusak saldo
-  if (sale.debtRecord && sale.debtRecord.payments.length > 0) {
-    return fail(400, "debt_has_payments_cannot_cancel", {
-      payments_count: sale.debtRecord.payments.length,
-    });
-  }
-
   try {
     const updated = await prisma.$transaction(async (tx) => {
-      // Kunci baris transaksi dengan FOR UPDATE
+      // 1. Kunci baris transaksi dengan FOR UPDATE (urutan lock: sales_transactions -> debt_records)
       const locked = await tx.$queryRaw<Array<{ sale_id: string; status: string }>>`
         SELECT sale_id, status FROM sales_transactions WHERE sale_id = ${sale.sale_id} FOR UPDATE
       `;
@@ -127,12 +120,32 @@ export async function PATCH(
         return alreadyDone!;
       }
 
+      // 2. Kunci baris debt_records (bila ada) & periksa jumlah cicilan DI DALAM transaksi
+      // agar tidak terjadi race condition dengan pembayaran cicilan bersamaan
+      const lockedDebt = await tx.$queryRaw<Array<{ debt_id: string }>>`
+        SELECT debt_id FROM debt_records WHERE sale_id = ${sale.sale_id} FOR UPDATE
+      `;
+      const debtId = lockedDebt[0]?.debt_id;
+      if (debtId) {
+        const paymentCount = await tx.debtPayment.count({
+          where: { debt_id: debtId },
+        });
+        if (paymentCount > 0) {
+          throw new SaleError(400, "debt_has_payments_cannot_cancel", {
+            payments_count: paymentCount,
+          });
+        }
+      }
+
       const wasCompleted = locked[0].status === "Lunas" || locked[0].status === "Hutang";
 
-      // PENGEMBALIAN STOK:
+      // 3. PENGEMBALIAN STOK:
       // Hanya jika transaksi sebelumnya berstatus Lunas atau Hutang (karena saat Draft / Menunggu Pembayaran stok belum dipotong)
       if (wasCompleted) {
-        for (const item of sale.details) {
+        const itemsToRestore = await tx.saleDetail.findMany({
+          where: { sale_id: sale.sale_id },
+        });
+        for (const item of itemsToRestore) {
           await tx.product.update({
             where: { id: item.product_id },
             data: { stock: { increment: item.quantity } },
@@ -140,10 +153,10 @@ export async function PATCH(
         }
       }
 
-      // Hapus data hutang jika belum pernah dicicil sama sekali
-      if (sale.debtRecord) {
+      // 4. Hapus data hutang jika belum pernah dicicil sama sekali
+      if (debtId) {
         await tx.debtRecord.delete({
-          where: { debt_id: sale.debtRecord.debt_id },
+          where: { debt_id: debtId },
         });
       }
 

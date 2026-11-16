@@ -16,6 +16,7 @@ const navByRole = {
     { key: "produk", icon: "M12 3l8 4v10l-8 4-8-4V7l8-4zM12 12l8-5M12 12L4 7M12 12v9", href: "/produk" },
     { key: "kategori", icon: "M4 5h7v7H4zM13 5h7v4h-7zM13 11h7v8h-7zM4 14h7v5H4z", href: "/kategori" },
     { key: "supplier", icon: "M12 3a5 5 0 015 5c0 3-2 4-2 4h-6s-2-1-2-4a5 5 0 015-5zM5 15h14v5H5z", href: "/supplier" },
+    { key: "pelanggan", icon: "M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75", href: "/pelanggan" },
     { key: "kasir", icon: "M16 14a4 4 0 10-8 0M12 10a3 3 0 100-6 3 3 0 000 6zM4 20c1.5-3 4.5-4.5 8-4.5s6.5 1.5 8 4.5", href: "/kasir" },
     { key: "pembelian", icon: "M6 4h12v3H6zM4 7h16l1 4H3l1-4zM4 11h16v9H4zM9 14h6", href: "/pembelian" },
     { key: "hutangPelanggan", icon: "M8 3l4 4 4-4 3 3-7 7-7-7 3-3zM12 17v4M8 19h8", href: "/hutang-pelanggan" },

@@ -62,7 +62,20 @@ export function formatActivityAction(action: string): string {
     case "productDeactivate":
       return "Menonaktifkan produk";
     case "supplierAdd":
+    case "supplierCreate":
       return "Menambah supplier baru";
+    case "supplierUpdate":
+      return "Mengubah supplier";
+    case "supplierDelete":
+      return "Menghapus supplier";
+    case "customerAdd":
+    case "customerCreate":
+      return "Menambah pelanggan";
+    case "customerUpdate":
+    case "customerEdit":
+      return "Mengubah pelanggan";
+    case "customerDelete":
+      return "Menghapus pelanggan";
     case "purchase":
     case "purchaseCreate":
       return "Mencatat pembelian";
