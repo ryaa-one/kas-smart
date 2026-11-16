@@ -12,7 +12,21 @@ export interface PurchaseDetailInput {
 
 export interface PurchaseInput {
   supplier_id?: string | null;
+  purchase_date?: string | null;
   details: PurchaseDetailInput[];
+}
+
+export class PurchaseError extends Error {
+  status: number;
+  code: string;
+  extra?: Record<string, unknown>;
+
+  constructor(status: number, code: string, extra?: Record<string, unknown>) {
+    super(code);
+    this.status = status;
+    this.code = code;
+    this.extra = extra;
+  }
 }
 
 export interface PurchaseDetail {
@@ -65,6 +79,25 @@ export function validatePurchaseInput(
     ? null 
     : input.supplier_id || null;
 
+  // purchase_date opsional (ISO string atau YYYY-MM-DD)
+  let purchase_date: string | null | undefined = undefined;
+  if (input.purchase_date !== undefined && input.purchase_date !== null && input.purchase_date !== "") {
+    if (typeof input.purchase_date !== "string") {
+      errors.push({ code: "invalid_purchase_date", field: "purchase_date" });
+    } else {
+      const trimmedDate = input.purchase_date.trim();
+      const normalized = /^\d{4}-\d{2}-\d{2}$/.test(trimmedDate)
+        ? `${trimmedDate}T12:00:00.000Z`
+        : trimmedDate;
+      const parsed = new Date(normalized);
+      if (isNaN(parsed.getTime())) {
+        errors.push({ code: "invalid_purchase_date", field: "purchase_date" });
+      } else {
+        purchase_date = parsed.toISOString();
+      }
+    }
+  }
+
   // details wajib array minimal 1
   if (!Array.isArray(input.details) || input.details.length === 0) {
     errors.push({ code: "details_required" });
@@ -110,7 +143,7 @@ export function validatePurchaseInput(
 
   return {
     valid: true,
-    data: { supplier_id, details },
+    data: { supplier_id, purchase_date, details },
   };
 }
 

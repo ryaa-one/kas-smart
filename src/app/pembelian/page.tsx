@@ -4,7 +4,7 @@
 // GET/POST /api/purchases | GET/PATCH/DELETE /api/purchases/:id
 // Stok management: CREATE → stok bertambah, EDIT → adjust stok, DELETE → kembalikan stok.
 // Owner: full CRUD. Kasir: read-only (tombol Tambah/Edit/Hapus hidden).
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { useLang } from "@/lib/i18n/LanguageContext";
 import { useAuth } from "@/lib/auth";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
@@ -54,25 +54,62 @@ interface Line {
   unit_purchase_price: string;
 }
 
-// Form Tambah Pembelian (Owner only).
-function PurchaseForm({ onClose, onSuccess }: { onClose: () => void; onSuccess: () => void }) {
+function toDateInputValue(iso?: string): string {
+  const d = iso ? new Date(iso) : new Date();
+  if (isNaN(d.getTime())) return "";
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+// Form Tambah / Ubah Pembelian (Owner only).
+function PurchaseForm({
+  initialPurchase,
+  onClose,
+  onSuccess,
+}: {
+  initialPurchase?: Purchase | null;
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
   const { t } = useLang();
+  const isEdit = Boolean(initialPurchase);
+
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
-  const [supplierId, setSupplierId] = useState("");
-  const [lines, setLines] = useState<Line[]>([{ product_id: "", quantity: "", unit_purchase_price: "" }]);
-  const [errors, setErrors] = useState<{ lines?: Record<number, { product?: string; quantity?: string }> }>({});
+  const [supplierId, setSupplierId] = useState(initialPurchase?.supplier_id ?? "");
+  const [purchaseDate, setPurchaseDate] = useState(
+    toDateInputValue(initialPurchase?.purchase_date)
+  );
+  const [lines, setLines] = useState<Line[]>(() =>
+    initialPurchase && initialPurchase.details.length > 0
+      ? initialPurchase.details.map((d) => ({
+          product_id: d.product_id,
+          quantity: String(d.quantity),
+          unit_purchase_price: String(d.unit_purchase_price),
+        }))
+      : [{ product_id: "", quantity: "", unit_purchase_price: "" }]
+  );
+  const [errors, setErrors] = useState<{
+    lines?: Record<number, { product?: string; quantity?: string }>;
+  }>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
+    let active = true;
     Promise.all([
       fetch("/api/suppliers").then((r) => (r.ok ? r.json() : null)),
       fetch("/api/products").then((r) => (r.ok ? r.json() : null)),
     ]).then(([supRes, proRes]) => {
+      if (!active) return;
       if (supRes?.data?.suppliers) setSuppliers(supRes.data.suppliers);
       if (proRes?.data?.products) setProducts(proRes.data.products);
     });
+    return () => {
+      active = false;
+    };
   }, []);
 
   const setLine = (i: number, patch: Partial<Line>) =>
@@ -87,7 +124,8 @@ function PurchaseForm({ onClose, onSuccess }: { onClose: () => void; onSuccess: 
   };
 
   const total = lines.reduce(
-    (s, l) => s + (parseInt(l.quantity, 10) || 0) * (parseInt(l.unit_purchase_price, 10) || 0),
+    (s, l) =>
+      s + (parseInt(l.quantity, 10) || 0) * (parseInt(l.unit_purchase_price, 10) || 0),
     0
   );
 
@@ -107,6 +145,7 @@ function PurchaseForm({ onClose, onSuccess }: { onClose: () => void; onSuccess: 
 
     const body = {
       supplier_id: supplierId || null,
+      purchase_date: purchaseDate || null,
       details: lines.map((l) => ({
         product_id: l.product_id,
         quantity: parseInt(l.quantity, 10) || 0,
@@ -115,13 +154,15 @@ function PurchaseForm({ onClose, onSuccess }: { onClose: () => void; onSuccess: 
     };
 
     try {
-      const res = await fetch("/api/purchases", {
-        method: "POST",
+      const url = isEdit ? `/api/purchases/${initialPurchase!.id}` : "/api/purchases";
+      const method = isEdit ? "PATCH" : "POST";
+      const res = await fetch(url, {
+        method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
 
-      const json = await res.json();
+      const json = await res.json().catch(() => ({}));
 
       if (!res.ok) {
         if (json.error === "forbidden") {
@@ -130,8 +171,21 @@ function PurchaseForm({ onClose, onSuccess }: { onClose: () => void; onSuccess: 
           setError(t.pembelian.errorProductNotFound);
         } else if (json.error === "supplier_not_found") {
           setError(t.pembelian.errorSupplierNotFound);
+        } else if (json.error === "invalid_purchase_date") {
+          setError(t.pembelian.errorInvalidDate);
+        } else if (json.error === "insufficient_stock") {
+          if (json.product_name && json.current_stock !== undefined && json.required_reduction !== undefined) {
+            setError(
+              t.pembelian.errorInsufficientStockDetail
+                .replace("{product}", String(json.product_name))
+                .replace("{current}", String(json.current_stock))
+                .replace("{needed}", String(json.required_reduction))
+            );
+          } else {
+            setError(t.pembelian.errorInsufficientStock);
+          }
         } else {
-          setError(t.pembelian.errorAddFailed);
+          setError(isEdit ? t.pembelian.errorUpdateFailed : t.pembelian.errorAddFailed);
         }
         setLoading(false);
         return;
@@ -148,27 +202,42 @@ function PurchaseForm({ onClose, onSuccess }: { onClose: () => void; onSuccess: 
   return (
     <div className="space-y-4">
       {error && (
-        <div className="px-3 py-2 bg-red-50 text-red-700 rounded-lg text-sm">{error}</div>
+        <div className="px-3 py-2 bg-red-50 text-red-700 rounded-lg text-sm" role="alert">
+          {error}
+        </div>
       )}
 
-      <Select
-        label={`${t.pembelian.fieldSupplier} ${t.pembelian.supplierOptional}`}
-        value={supplierId}
-        onChange={(e) => setSupplierId(e.target.value)}
-        disabled={loading}
-      >
-        <option value="">{t.pembelian.noSupplier}</option>
-        {suppliers.map((s) => (
-          <option key={s.id} value={s.id}>
-            {s.name}
-          </option>
-        ))}
-      </Select>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <Select
+          label={`${t.pembelian.fieldSupplier} ${t.pembelian.supplierOptional}`}
+          value={supplierId}
+          onChange={(e) => setSupplierId(e.target.value)}
+          disabled={loading}
+        >
+          <option value="">{t.pembelian.noSupplier}</option>
+          {suppliers.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}
+            </option>
+          ))}
+        </Select>
+
+        <Input
+          type="date"
+          label={t.pembelian.fieldDate}
+          value={purchaseDate}
+          onChange={(e) => setPurchaseDate(e.target.value)}
+          disabled={loading}
+        />
+      </div>
 
       <div className="space-y-3">
         <label className="text-sm font-medium text-foreground">{t.pembelian.fieldProduct}</label>
         {lines.map((l, i) => (
-          <div key={i} className="grid grid-cols-1 sm:grid-cols-[1fr_90px_140px_auto] gap-2 items-start">
+          <div
+            key={i}
+            className="grid grid-cols-1 sm:grid-cols-[1fr_90px_140px_auto] gap-2 items-start"
+          >
             <Select
               value={l.product_id}
               onChange={(e) => pickProduct(i, e.target.value)}
@@ -206,7 +275,15 @@ function PurchaseForm({ onClose, onSuccess }: { onClose: () => void; onSuccess: 
               className="p-2.5 rounded-lg text-muted hover:text-danger hover:bg-red-50 disabled:opacity-30 transition-colors self-start"
               aria-label={t.common.delete}
             >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <svg
+                width="15"
+                height="15"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              >
                 <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
               </svg>
             </button>
@@ -214,11 +291,21 @@ function PurchaseForm({ onClose, onSuccess }: { onClose: () => void; onSuccess: 
         ))}
         <button
           type="button"
-          onClick={() => setLines((ls) => [...ls, { product_id: "", quantity: "", unit_purchase_price: "" }])}
+          onClick={() =>
+            setLines((ls) => [...ls, { product_id: "", quantity: "", unit_purchase_price: "" }])
+          }
           className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:opacity-80"
           disabled={loading}
         >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+          >
             <path d="M12 5v14M5 12h14" />
           </svg>
           {t.common.add}
@@ -250,53 +337,135 @@ export default function PembelianPage() {
   const [purchases, setPurchases] = useState<Purchase[]>([]);
   const [detail, setDetail] = useState<Purchase | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [editTarget, setEditTarget] = useState<Purchase | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-
-  const loadPurchases = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const res = await fetch("/api/purchases");
-      const json = await res.json();
-
-      if (!res.ok) {
-        if (json.error === "unauthorized") {
-          setError(t.common.errorUnauthorized);
-        } else {
-          setError(t.pembelian.errorLoadFailed);
-        }
-        setLoading(false);
-        return;
-      }
-
-      setPurchases(json.data.purchases || []);
-      setLoading(false);
-    } catch {
-      setError("Koneksi ke server terganggu");
-      setLoading(false);
-    }
-  }, [t.common.errorUnauthorized, t.pembelian.errorLoadFailed]);
+  const [blockMsg, setBlockMsg] = useState("");
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   useEffect(() => {
-    void loadPurchases();
-  }, [loadPurchases]);
+    let active = true;
+    async function loadPurchases() {
+      setLoading(true);
+      setError("");
+      try {
+        const res = await fetch("/api/purchases");
+        const json = await res.json();
+
+        if (!res.ok) {
+          if (active) {
+            if (json.error === "unauthorized") {
+              setError(t.common.errorUnauthorized);
+            } else {
+              setError(t.pembelian.errorLoadFailed);
+            }
+          }
+          return;
+        }
+
+        if (active) {
+          setPurchases(json.data.purchases || []);
+        }
+      } catch {
+        if (active) {
+          setError("Koneksi ke server terganggu");
+        }
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
+      }
+    }
+
+    loadPurchases();
+    return () => {
+      active = false;
+    };
+  }, [refreshTrigger, t.common.errorUnauthorized, t.pembelian.errorLoadFailed]);
 
   const handleSuccess = () => {
-    loadPurchases();
+    setRefreshTrigger((k) => k + 1);
   };
+
+  const handleDelete = async (p: Purchase) => {
+    if (!window.confirm(t.pembelian.deleteConfirm)) return;
+    setBlockMsg("");
+    setDeletingId(p.id);
+    try {
+      const res = await fetch(`/api/purchases/${p.id}`, {
+        method: "DELETE",
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (json.error === "insufficient_stock") {
+          if (json.product_name && json.current_stock !== undefined && json.required_reduction !== undefined) {
+            setBlockMsg(
+              t.pembelian.errorInsufficientStockDetail
+                .replace("{product}", String(json.product_name))
+                .replace("{current}", String(json.current_stock))
+                .replace("{needed}", String(json.required_reduction))
+            );
+          } else {
+            setBlockMsg(t.pembelian.errorInsufficientStock);
+          }
+        } else if (res.status === 403) {
+          setBlockMsg(t.common.errorForbidden);
+        } else {
+          setBlockMsg(t.pembelian.errorDeleteFailed);
+        }
+        return;
+      }
+      if (detail?.id === p.id) {
+        setDetail(null);
+      }
+      setRefreshTrigger((k) => k + 1);
+    } catch {
+      setBlockMsg("Koneksi ke server terganggu");
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const actionBtn = "p-1.5 rounded-md hover:bg-zinc-100 transition-colors disabled:opacity-40";
 
   return (
     <DashboardLayout title={t.pembelian.title} subtitle={t.pembelian.subtitle}>
       <Card>
         {error && (
-          <div className="mb-4 px-3 py-2 bg-red-50 text-red-700 rounded-lg text-sm">{error}</div>
+          <div className="mb-4 px-3 py-2 bg-red-50 text-red-700 rounded-lg text-sm" role="alert">
+            {error}
+          </div>
+        )}
+
+        {blockMsg && (
+          <div
+            role="alert"
+            className="mb-4 flex items-start justify-between gap-3 rounded-lg bg-danger/10 border border-danger/30 text-danger px-4 py-3 text-sm font-medium"
+          >
+            <span>{blockMsg}</span>
+            <button
+              type="button"
+              onClick={() => setBlockMsg("")}
+              className="shrink-0 text-xs underline underline-offset-2"
+            >
+              {t.common.close}
+            </button>
+          </div>
         )}
 
         {isOwner && (
           <div className="flex justify-end mb-4">
             <Button onClick={() => setAddOpen(true)}>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <svg
+                width="15"
+                height="15"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              >
                 <path d="M12 5v14M5 12h14" />
               </svg>
               {t.common.add}
@@ -332,10 +501,57 @@ export default function PembelianPage() {
                 <Td className="text-right tabular-nums font-medium">{formatRupiah(p.total)}</Td>
                 <Td className="text-muted whitespace-nowrap">{p.user_name}</Td>
                 <Td>
-                  <div className="flex justify-end">
+                  <div className="flex items-center justify-end gap-1">
                     <Button size="sm" variant="secondary" onClick={() => setDetail(p)}>
                       {t.common.detail}
                     </Button>
+                    {isOwner && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setEditTarget(p)}
+                          className={actionBtn}
+                          title={t.common.edit}
+                          aria-label={t.common.edit}
+                        >
+                          <svg
+                            width="15"
+                            height="15"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.7"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            className="text-muted"
+                          >
+                            <path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4L16.5 3.5z" />
+                          </svg>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDelete(p)}
+                          disabled={deletingId === p.id}
+                          className={actionBtn}
+                          title={t.common.delete}
+                          aria-label={t.common.delete}
+                        >
+                          <svg
+                            width="15"
+                            height="15"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.7"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            className="text-muted hover:text-danger"
+                          >
+                            <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
+                          </svg>
+                        </button>
+                      </>
+                    )}
                   </div>
                 </Td>
               </tr>
@@ -348,6 +564,25 @@ export default function PembelianPage() {
       {isOwner && (
         <Modal open={addOpen} onClose={() => setAddOpen(false)} title={t.pembelian.addTitle} wide>
           {addOpen && <PurchaseForm onClose={() => setAddOpen(false)} onSuccess={handleSuccess} />}
+        </Modal>
+      )}
+
+      {/* Modal Ubah Pembelian (Owner only) */}
+      {isOwner && (
+        <Modal
+          open={editTarget !== null}
+          onClose={() => setEditTarget(null)}
+          title={t.pembelian.editTitle}
+          wide
+        >
+          {editTarget && (
+            <PurchaseForm
+              key={editTarget.id}
+              initialPurchase={editTarget}
+              onClose={() => setEditTarget(null)}
+              onSuccess={handleSuccess}
+            />
+          )}
         </Modal>
       )}
 
@@ -381,7 +616,9 @@ export default function PembelianPage() {
                     <th className="px-3 py-2 font-semibold">{t.pembelian.detailItem}</th>
                     <th className="px-3 py-2 font-semibold text-center">{t.pembelian.detailQty}</th>
                     <th className="px-3 py-2 font-semibold text-right">{t.pembelian.detailPrice}</th>
-                    <th className="px-3 py-2 font-semibold text-right">{t.pembelian.detailSubtotal}</th>
+                    <th className="px-3 py-2 font-semibold text-right">
+                      {t.pembelian.detailSubtotal}
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-line">
@@ -389,8 +626,12 @@ export default function PembelianPage() {
                     <tr key={d.id}>
                       <td className="px-3 py-2">{d.product_name}</td>
                       <td className="px-3 py-2 text-center tabular-nums">{d.quantity}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{formatRupiah(d.unit_purchase_price)}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{formatRupiah(d.subtotal)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">
+                        {formatRupiah(d.unit_purchase_price)}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums">
+                        {formatRupiah(d.subtotal)}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
