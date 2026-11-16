@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { requireLogin, requireOwner, ok, fail } from "@/lib/api-auth";
 import { prisma } from "@/lib/prisma";
-import { DebtStatus } from "@/generated/prisma/enums";
+import { DebtStatus, SaleStatus } from "@/generated/prisma/enums";
 import { serializeDebt } from "@/lib/debt-api";
 
 // GET /api/debts/[id] — detail satu data hutang pelanggan (Owner & Kasir)
@@ -112,39 +112,53 @@ export async function PATCH(
     newStatus = newRemainingDebt === 0 ? DebtStatus.Paid : (alreadyPaid > 0 ? DebtStatus.Partial : DebtStatus.Unpaid);
   }
 
-  const updated = await prisma.debtRecord.update({
-    where: { debt_id: id },
-    data: {
-      customer_id: newCustomerId,
-      total_debt: newTotalDebt,
-      remaining_debt: newRemainingDebt,
-      status: newStatus,
-    },
-    include: {
-      customer: { select: { id: true, name: true, phone: true, address: true } },
-      sale: {
-        select: {
-          sale_id: true,
-          invoice_number: true,
-          transaction_date: true,
-          total: true,
-          payment_method: true,
-          status: true,
+  const updated = await prisma.$transaction(async (tx) => {
+    // Sinkronkan sales_transactions jika customer berubah atau status lunas berubah
+    await tx.salesTransaction.update({
+      where: { sale_id: debt.sale_id },
+      data: {
+        customer_id: newCustomerId,
+        status: newRemainingDebt === 0 ? SaleStatus.LUNAS : SaleStatus.HUTANG,
+        paid_at: newRemainingDebt === 0 ? (debt.sale?.paid_at ?? new Date()) : null,
+      },
+    });
+
+    const d = await tx.debtRecord.update({
+      where: { debt_id: id },
+      data: {
+        customer_id: newCustomerId,
+        total_debt: newTotalDebt,
+        remaining_debt: newRemainingDebt,
+        status: newStatus,
+      },
+      include: {
+        customer: { select: { id: true, name: true, phone: true, address: true } },
+        sale: {
+          select: {
+            sale_id: true,
+            invoice_number: true,
+            transaction_date: true,
+            total: true,
+            payment_method: true,
+            status: true,
+          },
+        },
+        payments: {
+          include: { user: { select: { id: true, name: true } } },
+          orderBy: { payment_date: "desc" },
         },
       },
-      payments: {
-        include: { user: { select: { id: true, name: true } } },
-        orderBy: { payment_date: "desc" },
-      },
-    },
-  });
+    });
 
-  await prisma.activityLog.create({
-    data: {
-      user_id: session.id,
-      action: "debtEdit",
-      description: `Ubah data hutang ${id}`,
-    },
+    await tx.activityLog.create({
+      data: {
+        user_id: session.id,
+        action: "debtEdit",
+        description: `Ubah data hutang ${id}`,
+      },
+    });
+
+    return d;
   });
 
   return ok({ debt: serializeDebt(updated) });

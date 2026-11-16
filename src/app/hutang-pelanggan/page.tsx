@@ -33,6 +33,7 @@ function HutangView({ mineOnly = false }: { mineOnly?: boolean }) {
   const [debts, setDebts] = useState<SerializedDebtRecord[]>([]);
   const [customers, setCustomers] = useState<{ id: string; name: string }[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
 
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<DebtStatus | "">("");
@@ -63,22 +64,60 @@ function HutangView({ mineOnly = false }: { mineOnly?: boolean }) {
       ]);
       if (debtsRes.ok) {
         const data = await debtsRes.json();
-        if (data?.debts) setDebts(data.debts);
+        const debtsList: SerializedDebtRecord[] = data?.data?.debts ?? data?.debts ?? [];
+        setDebts(debtsList);
+        setLoadError("");
+      } else {
+        setLoadError("Gagal memuat data hutang dari server");
       }
       if (custRes.ok) {
         const data = await custRes.json();
-        if (data?.customers) setCustomers(data.customers);
+        const custList: { id: string; name: string }[] = data?.data?.customers ?? data?.customers ?? [];
+        setCustomers(custList);
       }
     } catch (err) {
       console.error("Failed to load debts data:", err);
+      setLoadError("Terjadi kesalahan jaringan saat memuat data hutang");
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    loadData();
-  }, [loadData]);
+    let active = true;
+    async function init() {
+      try {
+        const [debtsRes, custRes] = await Promise.all([
+          fetch("/api/debts"),
+          fetch("/api/customers"),
+        ]);
+        if (debtsRes.ok) {
+          const data = await debtsRes.json();
+          const debtsList: SerializedDebtRecord[] = data?.data?.debts ?? data?.debts ?? [];
+          if (active) {
+            setDebts(debtsList);
+            setLoadError("");
+          }
+        } else if (active) {
+          setLoadError("Gagal memuat data hutang dari server");
+        }
+        if (custRes.ok) {
+          const data = await custRes.json();
+          const custList: { id: string; name: string }[] = data?.data?.customers ?? data?.customers ?? [];
+          if (active) setCustomers(custList);
+        }
+      } catch (err) {
+        console.error("Failed to load debts data:", err);
+        if (active) setLoadError("Terjadi kesalahan jaringan saat memuat data hutang");
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+    init();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const totals = useMemo(() => {
     const totalDebt = debts.reduce((s, d) => s + d.total_debt, 0);
@@ -108,8 +147,9 @@ function HutangView({ mineOnly = false }: { mineOnly?: boolean }) {
       const res = await fetch(`/api/debts/${d.debt_id}`);
       if (res.ok) {
         const data = await res.json();
-        if (data?.debt) {
-          setPaying(data.debt);
+        const debtObj = data?.data?.debt ?? data?.debt;
+        if (debtObj) {
+          setPaying(debtObj);
         }
       }
     } catch {
@@ -141,12 +181,13 @@ function HutangView({ mineOnly = false }: { mineOnly?: boolean }) {
       const data = await res.json().catch(() => null);
 
       if (!res.ok) {
+        const errCode = data?.error ?? data?.data?.error;
         setPayError(
-          data?.error === "amount_exceeds_remaining"
+          errCode === "amount_exceeds_remaining"
             ? t.hutang.errorAmountOver
-            : data?.error === "debt_already_paid"
+            : errCode === "debt_already_paid"
             ? "Hutang sudah lunas"
-            : data?.error || "Gagal mencatat pembayaran"
+            : errCode || "Gagal mencatat pembayaran"
         );
         return;
       }
@@ -198,7 +239,8 @@ function HutangView({ mineOnly = false }: { mineOnly?: boolean }) {
       const data = await res.json().catch(() => null);
 
       if (!res.ok) {
-        setFormErrors({ total: data?.error || "Gagal memperbarui data hutang" });
+        const errCode = data?.error ?? data?.data?.error;
+        setFormErrors({ total: errCode || "Gagal memperbarui data hutang" });
         return;
       }
 
@@ -224,7 +266,8 @@ function HutangView({ mineOnly = false }: { mineOnly?: boolean }) {
 
       if (!res.ok) {
         const data = await res.json().catch(() => null);
-        alert(data?.error || "Gagal menghapus data hutang");
+        const errCode = data?.error ?? data?.data?.error;
+        alert(errCode || "Gagal menghapus data hutang");
         return;
       }
 
@@ -249,6 +292,12 @@ function HutangView({ mineOnly = false }: { mineOnly?: boolean }) {
         <StatDebt label={t.hutang.tableRemaining} value={formatRupiah(totals.remaining)} icon="M8 3l4 4 4-4 3 3-7 7-7-7 3-3zM12 17v4M8 19h8" bg="bg-rose-600/10" color="text-rose-600" />
       </div>
 
+      {loadError && (
+        <div className="mb-4 flex items-center gap-2 rounded-lg bg-danger/10 text-danger px-4 py-3 text-sm font-medium" role="alert">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+          {loadError}
+        </div>
+      )}
       {paySuccess && (
         <div className="mb-4 flex items-center gap-2 rounded-lg bg-success/10 text-success px-4 py-3 text-sm font-medium" role="status">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M20 6L9 17l-5-5" /></svg>

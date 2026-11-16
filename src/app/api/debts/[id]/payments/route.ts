@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { requireLogin, ok, fail } from "@/lib/api-auth";
 import { prisma } from "@/lib/prisma";
-import { DebtStatus } from "@/generated/prisma/enums";
+import { DebtStatus, SaleStatus } from "@/generated/prisma/enums";
 import { serializeDebt, serializePayment, DebtError } from "@/lib/debt-api";
 
 // POST /api/debts/[id]/payments — mencatat pembayaran hutang pelanggan (Owner & Kasir, UC-17)
@@ -71,11 +71,12 @@ export async function POST(
         const locked = await tx.$queryRaw<
           Array<{
             debt_id: string;
+            sale_id: string;
             total_debt: number;
             remaining_debt: number;
             status: string;
           }>
-        >`SELECT debt_id, total_debt, remaining_debt, status FROM debt_records WHERE debt_id = ${debt.debt_id} FOR UPDATE`;
+        >`SELECT debt_id, sale_id, total_debt, remaining_debt, status FROM debt_records WHERE debt_id = ${debt.debt_id} FOR UPDATE`;
 
         const freshDebt = locked[0];
 
@@ -110,7 +111,19 @@ export async function POST(
           },
         });
 
-        // 2. Perbarui DEBT_RECORDS (remaining_debt & status)
+        // 2. Sinkronisasi status penjualan: jika utang telah lunas (newRemaining === 0),
+        // update sales_transactions status menjadi LUNAS dan catat paid_at.
+        if (newRemaining === 0) {
+          await tx.salesTransaction.update({
+            where: { sale_id: freshDebt.sale_id },
+            data: {
+              status: SaleStatus.LUNAS,
+              paid_at: new Date(),
+            },
+          });
+        }
+
+        // 3. Perbarui DEBT_RECORDS (remaining_debt & status)
         const updatedDebt = await tx.debtRecord.update({
           where: { debt_id: freshDebt.debt_id },
           data: {
@@ -138,7 +151,7 @@ export async function POST(
           },
         });
 
-        // 3. Catat ACTIVITY_LOGS (user dari session)
+        // 4. Catat ACTIVITY_LOGS (user dari session)
         const invoiceNo = debt.sale?.invoice_number || debt.sale_id;
         const custName = debt.customer?.name || "Pelanggan";
         await tx.activityLog.create({
