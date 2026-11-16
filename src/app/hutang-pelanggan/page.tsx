@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLang } from "@/lib/i18n/LanguageContext";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Card } from "@/components/ui/Card";
@@ -12,21 +12,15 @@ import { Modal } from "@/components/ui/Modal";
 import { Table, Th, Td } from "@/components/ui/Table";
 import { formatDate, formatDateTime, formatRupiah } from "@/lib/format";
 import { useAuth } from "@/lib/auth";
-import {
-  useDb,
-  getDb,
-  updateDebt,
-  deleteDebt,
-  payDebt,
-  type DebtRecord,
-  type DebtStatus,
-} from "@/lib/mock/db";
+import type { SerializedDebtRecord } from "@/lib/debt-api";
+
+type DebtStatus = "Unpaid" | "Partial" | "Paid";
 
 const debtBadge = (status: DebtStatus): "danger" | "warning" | "success" =>
   status === "Unpaid" ? "danger" : status === "Partial" ? "warning" : "success";
 
 // UC-16 (kelola data hutang) = Owner only; UC-17 (pembayaran hutang) = Owner & Kasir.
-// Sumber data: store bersama — hutang dari transaksi Hutang (C-3) muncul di sini.
+// Sumber data: PostgreSQL melalui Prisma API — hutang dari transaksi Hutang (C-3) muncul di sini.
 export default function HutangPelangganPage() {
   return <HutangView mineOnly={false} />;
 }
@@ -34,58 +28,97 @@ export default function HutangPelangganPage() {
 function HutangView({ mineOnly = false }: { mineOnly?: boolean }) {
   const { t } = useLang();
   const { user } = useAuth();
-  const db = useDb();
   const isOwner = user?.role === "Owner";
+
+  const [debts, setDebts] = useState<SerializedDebtRecord[]>([]);
+  const [customers, setCustomers] = useState<{ id: string; name: string }[]>([]);
+  const [loading, setLoading] = useState(true);
 
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<DebtStatus | "">("");
 
   // Modal bayar (UC-17)
-  const [paying, setPaying] = useState<DebtRecord | null>(null);
+  const [paying, setPaying] = useState<SerializedDebtRecord | null>(null);
   const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
   const [payError, setPayError] = useState("");
   const [paySuccess, setPaySuccess] = useState(false);
+  const [isSubmittingPay, setIsSubmittingPay] = useState(false);
 
   // Modal ubah (UC-16, Owner) — KONTRAK-5: tidak ada tambah hutang manual;
   // seluruh hutang berasal dari transaksi metode Hutang (UC-13).
   const [formOpen, setFormOpen] = useState(false);
-  const [editing, setEditing] = useState<DebtRecord | null>(null);
+  const [editing, setEditing] = useState<SerializedDebtRecord | null>(null);
   const [formCustomerId, setFormCustomerId] = useState("");
   const [formTotal, setFormTotal] = useState("");
   const [formErrors, setFormErrors] = useState<{ customer?: string; total?: string }>({});
   const [formSuccess, setFormSuccess] = useState("");
+  const [isSubmittingEdit, setIsSubmittingEdit] = useState(false);
 
-  const actor = user ? { id: user.id, name: user.name } : null;
+  const loadData = useCallback(async () => {
+    try {
+      const [debtsRes, custRes] = await Promise.all([
+        fetch("/api/debts"),
+        fetch("/api/customers"),
+      ]);
+      if (debtsRes.ok) {
+        const data = await debtsRes.json();
+        if (data?.debts) setDebts(data.debts);
+      }
+      if (custRes.ok) {
+        const data = await custRes.json();
+        if (data?.customers) setCustomers(data.customers);
+      }
+    } catch (err) {
+      console.error("Failed to load debts data:", err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const totals = useMemo(() => {
-    const totalDebt = db.debts.reduce((s, d) => s + d.total_debt, 0);
-    const remaining = db.debts.reduce((s, d) => s + d.remaining_debt, 0);
+    const totalDebt = debts.reduce((s, d) => s + d.total_debt, 0);
+    const remaining = debts.reduce((s, d) => s + d.remaining_debt, 0);
     return { totalDebt, paid: totalDebt - remaining, remaining };
-  }, [db.debts]);
+  }, [debts]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return db.debts.filter(
+    return debts.filter(
       (d) =>
         (!statusFilter || d.status === statusFilter) &&
         (!q || d.customer_name.toLowerCase().includes(q))
     );
-  }, [db.debts, query, statusFilter]);
+  }, [debts, query, statusFilter]);
 
-  const invoiceLabel = (d: DebtRecord) =>
-    getDb().sales.find((s) => s.id === d.sale_id)?.invoice_number ?? d.sale_id;
+  const invoiceLabel = (d: SerializedDebtRecord) => d.invoice_number || d.sale_id;
 
-  const openPay = (d: DebtRecord) => {
+  const openPay = async (d: SerializedDebtRecord) => {
     setPaying(d);
     setAmount("");
     setNote("");
     setPayError("");
     setPaySuccess(false);
+
+    try {
+      const res = await fetch(`/api/debts/${d.debt_id}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.debt) {
+          setPaying(data.debt);
+        }
+      }
+    } catch {
+      // keep fallback to current d
+    }
   };
 
-  const submitPay = () => {
-    if (!paying || !actor) return;
+  const submitPay = async () => {
+    if (!paying || isSubmittingPay) return;
     const n = parseInt(amount, 10) || 0;
     if (n <= 0) {
       setPayError(t.hutang.errorAmountMin);
@@ -95,21 +128,44 @@ function HutangView({ mineOnly = false }: { mineOnly?: boolean }) {
       setPayError(t.hutang.errorAmountOver);
       return;
     }
-    // Store bersama: remaining/status ikut terkoreksi + ACTIVITY_LOGS (C-3).
-    const res = payDebt(actor, paying.debt_id, n, note.trim());
-    if (!res.ok) {
-      setPayError(t.hutang.errorAmountOver);
-      return;
+
+    setIsSubmittingPay(true);
+    setPayError("");
+    try {
+      const res = await fetch(`/api/debts/${paying.debt_id}/payments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amount: n, note: note.trim() }),
+      });
+
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        setPayError(
+          data?.error === "amount_exceeds_remaining"
+            ? t.hutang.errorAmountOver
+            : data?.error === "debt_already_paid"
+            ? "Hutang sudah lunas"
+            : data?.error || "Gagal mencatat pembayaran"
+        );
+        return;
+      }
+
+      await loadData();
+      setPaying(null);
+      setPaySuccess(true);
+      setTimeout(() => setPaySuccess(false), 3000);
+    } catch {
+      setPayError("Terjadi kesalahan jaringan saat mencatat pembayaran");
+    } finally {
+      setIsSubmittingPay(false);
     }
-    setPaying(null);
-    setPaySuccess(true);
-    setTimeout(() => setPaySuccess(false), 3000);
   };
 
   // ===== UC-16: kelola data hutang (Owner only) =====
   // KONTRAK-5: tidak ada aksi "Tambah" manual — hutang hanya lahir dari
   // transaksi metode Hutang (UC-13). Owner tetap dapat mengubah/menghapus.
-  const openEdit = (d: DebtRecord) => {
+  const openEdit = (d: SerializedDebtRecord) => {
     setEditing(d);
     setFormCustomerId(d.customer_id);
     setFormTotal(String(d.total_debt));
@@ -117,8 +173,8 @@ function HutangView({ mineOnly = false }: { mineOnly?: boolean }) {
     setFormOpen(true);
   };
 
-  const submitForm = () => {
-    if (!actor || !editing) return;
+  const submitForm = async () => {
+    if (!editing || isSubmittingEdit) return;
     const e: typeof formErrors = {};
     // Customer WAJIB untuk data hutang (aturan PRD/ERD).
     if (!formCustomerId) e.customer = t.hutang.errorCustomerRequired;
@@ -131,18 +187,54 @@ function HutangView({ mineOnly = false }: { mineOnly?: boolean }) {
     setFormErrors(e);
     if (Object.keys(e).length) return;
 
-    updateDebt(actor, editing.debt_id, { total_debt: total, customer_id: formCustomerId });
-    setFormOpen(false);
-    setFormSuccess(t.hutang.successSaved);
-    setTimeout(() => setFormSuccess(""), 3000);
+    setIsSubmittingEdit(true);
+    try {
+      const res = await fetch(`/api/debts/${editing.debt_id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ total_debt: total, customer_id: formCustomerId }),
+      });
+
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        setFormErrors({ total: data?.error || "Gagal memperbarui data hutang" });
+        return;
+      }
+
+      await loadData();
+      setFormOpen(false);
+      setFormSuccess(t.hutang.successSaved);
+      setTimeout(() => setFormSuccess(""), 3000);
+    } catch {
+      setFormErrors({ total: "Terjadi kesalahan jaringan saat menyimpan" });
+    } finally {
+      setIsSubmittingEdit(false);
+    }
   };
 
-  const removeDebt = (d: DebtRecord) => {
-    if (!actor || !isOwner) return;
+  const removeDebt = async (d: SerializedDebtRecord) => {
+    if (!isOwner) return;
     if (!window.confirm(t.hutang.deleteConfirm)) return;
-    deleteDebt(actor, d.debt_id);
-    setFormSuccess(t.hutang.successDeleted);
-    setTimeout(() => setFormSuccess(""), 3000);
+
+    try {
+      const res = await fetch(`/api/debts/${d.debt_id}`, {
+        method: "DELETE",
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        alert(data?.error || "Gagal menghapus data hutang");
+        return;
+      }
+
+      await loadData();
+      setFormSuccess(t.hutang.successDeleted);
+      setTimeout(() => setFormSuccess(""), 3000);
+    } catch (err) {
+      console.error("Gagal menghapus hutang:", err);
+      alert("Terjadi kesalahan jaringan saat menghapus hutang");
+    }
   };
 
   return (
@@ -200,7 +292,7 @@ function HutangView({ mineOnly = false }: { mineOnly?: boolean }) {
         </div>
 
         <Table
-          empty={db.debts.length === 0 ? t.hutang.empty : t.hutang.emptySearch}
+          empty={loading ? "Memuat data hutang..." : debts.length === 0 ? t.hutang.empty : t.hutang.emptySearch}
           head={
             <>
               <Th>{t.hutang.tableCustomer}</Th>
@@ -217,7 +309,7 @@ function HutangView({ mineOnly = false }: { mineOnly?: boolean }) {
             <tr key={d.debt_id} className="hover:bg-zinc-50/70">
               <Td className="font-medium text-foreground whitespace-nowrap">{d.customer_name}</Td>
               <Td className="tabular-nums text-muted whitespace-nowrap">{invoiceLabel(d)}</Td>
-              <Td className="text-muted whitespace-nowrap">{formatDate(d.created_at)}</Td>
+              <Td className="text-muted whitespace-nowrap">{formatDate(d.transaction_date || d.created_at)}</Td>
               <Td className="text-right tabular-nums">{formatRupiah(d.total_debt)}</Td>
               <Td className={`text-right tabular-nums font-medium ${d.remaining_debt > 0 ? "text-danger" : "text-success"}`}>
                 {formatRupiah(d.remaining_debt)}
@@ -274,10 +366,12 @@ function HutangView({ mineOnly = false }: { mineOnly?: boolean }) {
         title={t.hutang.editTitle}
         footer={
           <>
-            <Button variant="secondary" onClick={() => setFormOpen(false)}>
+            <Button variant="secondary" onClick={() => setFormOpen(false)} disabled={isSubmittingEdit}>
               {t.common.cancel}
             </Button>
-            <Button onClick={submitForm}>{t.common.save}</Button>
+            <Button onClick={submitForm} disabled={isSubmittingEdit}>
+              {isSubmittingEdit ? "Menyimpan..." : t.common.save}
+            </Button>
           </>
         }
       >
@@ -289,7 +383,7 @@ function HutangView({ mineOnly = false }: { mineOnly?: boolean }) {
             error={formErrors.customer}
           >
             <option value="">{t.hutang.selectCustomer}</option>
-            {db.customers.map((c) => (
+            {customers.map((c) => (
               <option key={c.id} value={c.id}>{c.name}</option>
             ))}
           </Select>
@@ -312,38 +406,33 @@ function HutangView({ mineOnly = false }: { mineOnly?: boolean }) {
         title={t.hutang.payTitle}
         footer={
           <>
-            <Button variant="secondary" onClick={() => setPaying(null)}>
+            <Button variant="secondary" onClick={() => setPaying(null)} disabled={isSubmittingPay}>
               {t.common.cancel}
             </Button>
-            <Button onClick={submitPay} disabled={paying ? paying.remaining_debt <= 0 : false}>
-              {t.hutang.payButton}
+            <Button onClick={submitPay} disabled={isSubmittingPay || (paying ? paying.remaining_debt <= 0 : false)}>
+              {isSubmittingPay ? "Memproses..." : t.hutang.payButton}
             </Button>
           </>
         }
       >
         {paying && (
           <div className="space-y-4">
-            {/* Informasi hutang (workflow PRD step 3) — baca data terkini dari store */}
-            {(() => {
-              const cur = getDb().debts.find((x) => x.debt_id === paying.debt_id) ?? paying;
-              return (
-                <div className="rounded-lg bg-zinc-50 border border-line p-3 space-y-1.5">
-                  <p className="text-sm font-semibold text-foreground">{t.hutang.payInfo}</p>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-muted">{t.hutang.payTotal}</span>
-                    <span className="font-medium tabular-nums">{formatRupiah(cur.total_debt)}</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-muted">{t.hutang.payAlreadyPaid}</span>
-                    <span className="font-medium tabular-nums">{formatRupiah(cur.total_debt - cur.remaining_debt)}</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-muted">{t.hutang.payRemaining}</span>
-                    <span className="font-bold text-danger tabular-nums">{formatRupiah(cur.remaining_debt)}</span>
-                  </div>
-                </div>
-              );
-            })()}
+            {/* Informasi hutang (workflow PRD step 3) — baca data terkini */}
+            <div className="rounded-lg bg-zinc-50 border border-line p-3 space-y-1.5">
+              <p className="text-sm font-semibold text-foreground">{t.hutang.payInfo}</p>
+              <div className="flex justify-between text-sm">
+                <span className="text-muted">{t.hutang.payTotal}</span>
+                <span className="font-medium tabular-nums">{formatRupiah(paying.total_debt)}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-muted">{t.hutang.payAlreadyPaid}</span>
+                <span className="font-medium tabular-nums">{formatRupiah(paying.total_debt - paying.remaining_debt)}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-muted">{t.hutang.payRemaining}</span>
+                <span className="font-bold text-danger tabular-nums">{formatRupiah(paying.remaining_debt)}</span>
+              </div>
+            </div>
 
             <Input
               type="number"
@@ -368,10 +457,10 @@ function HutangView({ mineOnly = false }: { mineOnly?: boolean }) {
             {/* Riwayat pembayaran (DEBT_PAYMENTS) */}
             <div>
               <p className="text-sm font-semibold text-foreground mb-2">{t.hutang.payHistory}</p>
-              {paying.payments.length === 0 ? (
+              {(!paying.payments || paying.payments.length === 0) ? (
                 <p className="text-xs text-muted">{t.hutang.payEmptyHistory}</p>
               ) : (
-                <div className="space-y-1.5">
+                <div className="space-y-1.5 max-h-48 overflow-y-auto">
                   {paying.payments.map((p) => (
                     <div key={p.payment_id} className="flex items-center justify-between text-sm bg-zinc-50 border border-line rounded-lg px-3 py-2">
                       <div className="min-w-0">

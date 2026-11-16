@@ -6,7 +6,6 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { useLang } from "@/lib/i18n/LanguageContext";
-import { useAuth } from "@/lib/auth";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -23,7 +22,6 @@ interface Category {
 
 export default function KategoriPage() {
   const { t } = useLang();
-  const { user } = useAuth();
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
@@ -82,7 +80,7 @@ export default function KategoriPage() {
       }
       const json = await res.json();
       setCategories(json.data?.categories || []);
-    } catch (err) {
+    } catch {
       setError(t.kategori.errorLoadFailed || "Gagal memuat data kategori");
     } finally {
       setLoading(false);
@@ -147,14 +145,14 @@ export default function KategoriPage() {
 
       setModalOpen(false);
       await fetchCategories();
-    } catch (err) {
+    } catch {
       setFieldError("Koneksi ke server terganggu");
     } finally {
       setSubmitting(false);
     }
   };
 
-  const removeCategoryGuarded = async (id: string, catName: string) => {
+  const removeCategoryGuarded = async (id: string) => {
     const cat = categories.find((c) => c.id === id);
     if (cat && cat.product_count > 0) {
       setBlockMsg(
@@ -188,7 +186,7 @@ export default function KategoriPage() {
       }
 
       await fetchCategories();
-    } catch (err) {
+    } catch {
       setBlockMsg("Koneksi ke server terganggu");
     }
   };
@@ -317,7 +315,7 @@ export default function KategoriPage() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => removeCategoryGuarded(c.id, c.name)}
+                        onClick={() => removeCategoryGuarded(c.id)}
                         className={actionBtn}
                         title={t.common.delete}
                         aria-label={t.common.delete}

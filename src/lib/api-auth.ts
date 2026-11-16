@@ -101,7 +101,8 @@ export function clearedSessionCookieHeader(): string {
 export function hashlessUser<T extends { password: string }>(
   user: T
 ): Omit<T, "password"> {
-  const { password: _hidden, ...rest } = user;
+  const rest = { ...user };
+  delete (rest as { password?: string }).password;
   return rest;
 }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useLang } from "@/lib/i18n/LanguageContext";
 import { useAuth } from "@/lib/auth";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
@@ -10,67 +10,156 @@ import { Badge } from "@/components/ui/Badge";
 import { Modal } from "@/components/ui/Modal";
 import { ReceiptModal } from "@/components/ui/ReceiptModal";
 import { Table, Th, Td } from "@/components/ui/Table";
+import { Pagination } from "@/components/ui/Pagination";
 import { formatDateTime, formatRupiah } from "@/lib/format";
-import { useDb, type Sale, type SaleStatus } from "@/lib/mock/db";
+import type { SerializedSale } from "@/lib/sales-api";
 
 type MethodFilter = "" | "cash" | "qris" | "debt";
-type StatusFilter = "" | SaleStatus;
+type StatusFilter = "" | string;
 
 export default function RiwayatPenjualanPage() {
   return <RiwayatView mineOnly={false} />;
 }
 
 // mineOnly=true → halaman Kasir: hanya transaksi milik user login (H-3).
+// Di backend, GET /api/sales sudah mengisolasi data Kasir secara otomatis.
 export function RiwayatView({ mineOnly = false }: { mineOnly?: boolean }) {
   const { t } = useLang();
   const { user } = useAuth();
-  const db = useDb();
 
+  const [sales, setSales] = useState<SerializedSale[]>([]);
+  const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [method, setMethod] = useState<MethodFilter>("");
   const [status, setStatus] = useState<StatusFilter>("");
-  const [detail, setDetail] = useState<Sale | null>(null);
-  const [receipt, setReceipt] = useState<Sale | null>(null); // M-4: cetak struk dari riwayat
 
-  // PRD FR-12 + UC-15: riwayat dari store bersama; Kasir hanya miliknya
-  // (user_id session login, bukan nama hardcoded). Draft & batal tetap tercatat.
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return db.sales.filter((s) => {
-      if (mineOnly && s.user_id !== user?.id) return false;
-      if (q && !(s.invoice_number ?? "").toLowerCase().includes(q)) return false;
-      if (method && s.payment_method !== method) return false;
-      if (status && s.status !== status) return false;
-      if (from && s.transaction_date.slice(0, 10) < from) return false;
-      if (to && s.transaction_date.slice(0, 10) > to) return false;
-      return true;
-    });
-  }, [db.sales, mineOnly, user, query, from, to, method, status]);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [totalItems, setTotalItems] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
 
-  const methodLabel = (m: Sale["payment_method"]) =>
+  const [detail, setDetail] = useState<SerializedSale | null>(null);
+  const [receipt, setReceipt] = useState<SerializedSale | null>(null);
+
+  // Debounce search input (300ms)
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedQuery(query);
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  // Server-side fetching: search, filter rentang tanggal, metode, status & pagination
+  useEffect(() => {
+    let active = true;
+    async function loadSales() {
+      setLoading(true);
+      try {
+        const params = new URLSearchParams();
+        params.set("page", String(page));
+        params.set("page_size", String(pageSize));
+        if (debouncedQuery.trim()) params.set("search", debouncedQuery.trim());
+        if (from) params.set("from", from);
+        if (to) params.set("to", to);
+        if (method) params.set("payment_method", method);
+        if (status) params.set("status", status);
+
+        const res = await fetch(`/api/sales?${params.toString()}`);
+        if (!res.ok) {
+          if (active) {
+            setSales([]);
+            setTotalItems(0);
+            setTotalPages(1);
+          }
+          return;
+        }
+        const json = await res.json();
+        if (active && json?.data) {
+          let list: SerializedSale[] = json.data.sales ?? [];
+          if (mineOnly && user?.id) {
+            list = list.filter((s) => s.user_id === user.id);
+          }
+          setSales(list);
+          if (json.data.pagination) {
+            setTotalItems(json.data.pagination.total);
+            setTotalPages(json.data.pagination.total_pages);
+          } else {
+            setTotalItems(list.length);
+            setTotalPages(1);
+          }
+        }
+      } catch (err) {
+        console.error("Gagal memuat riwayat penjualan:", err);
+        if (active) {
+          setSales([]);
+          setTotalItems(0);
+        }
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+
+    loadSales();
+    return () => {
+      active = false;
+    };
+  }, [page, pageSize, debouncedQuery, from, to, method, status, mineOnly, user?.id]);
+
+  const handleOpenDetail = async (item: SerializedSale) => {
+    setDetail(item);
+    try {
+      const res = await fetch(`/api/sales/${item.id}`);
+      if (res.ok) {
+        const json = await res.json();
+        if (json?.data?.sale) {
+          setDetail(json.data.sale);
+        }
+      }
+    } catch (err) {
+      console.error("Gagal memuat detail transaksi:", err);
+    }
+  };
+
+  const handleResetFilters = () => {
+    setQuery("");
+    setDebouncedQuery("");
+    setFrom("");
+    setTo("");
+    setMethod("");
+    setStatus("");
+    setPage(1);
+  };
+
+  const hasActiveFilter = Boolean(query || from || to || method || status);
+
+  const methodLabel = (m: string) =>
     m === "cash" ? t.riwayat.methodCash : m === "qris" ? t.riwayat.methodQris : t.riwayat.methodDebt;
 
-  const statusLabel = (s: SaleStatus) =>
-    ({
-      draft: t.riwayat.statusDraft,
-      waiting_payment: t.riwayat.statusWaiting,
-      paid: t.riwayat.statusPaid,
-      debt: t.riwayat.statusDebt,
-      cancelled: t.riwayat.statusCancelled,
-    } as Record<SaleStatus, string>)[s];
+  const statusLabel = (s: string) => {
+    const lower = s.toLowerCase();
+    if (lower === "draft") return t.riwayat.statusDraft;
+    if (lower === "menunggu pembayaran" || lower === "waiting_payment") return t.riwayat.statusWaiting;
+    if (lower === "lunas" || lower === "paid") return t.riwayat.statusPaid;
+    if (lower === "hutang" || lower === "debt") return t.riwayat.statusDebt;
+    if (lower === "dibatalkan" || lower === "cancelled") return t.riwayat.statusCancelled;
+    return s;
+  };
 
-  const statusVariant = (s: SaleStatus) =>
-    ({
-      draft: "muted",
-      waiting_payment: "warning",
-      paid: "success",
-      debt: "primary",
-      cancelled: "danger",
-    } as Record<SaleStatus, "primary" | "warning" | "success" | "muted" | "danger">)[s];
+  const statusVariant = (s: string): "primary" | "warning" | "success" | "muted" | "danger" => {
+    const lower = s.toLowerCase();
+    if (lower === "draft") return "muted";
+    if (lower === "menunggu pembayaran" || lower === "waiting_payment") return "warning";
+    if (lower === "lunas" || lower === "paid") return "success";
+    if (lower === "hutang" || lower === "debt") return "primary";
+    if (lower === "dibatalkan" || lower === "cancelled") return "danger";
+    return "muted";
+  };
 
-  const methodVariant = (m: Sale["payment_method"]): "primary" | "muted" | "warning" =>
+  const methodVariant = (m: string): "primary" | "muted" | "warning" =>
     m === "cash" ? "primary" : m === "qris" ? "warning" : "muted";
 
   const inputCls =
@@ -98,27 +187,70 @@ export function RiwayatView({ mineOnly = false }: { mineOnly?: boolean }) {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <label className="text-xs text-muted whitespace-nowrap">{t.riwayat.dateFrom}</label>
-            <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className={inputCls} />
+            <input
+              type="date"
+              value={from}
+              onChange={(e) => {
+                setFrom(e.target.value);
+                setPage(1);
+              }}
+              className={inputCls}
+            />
             <label className="text-xs text-muted whitespace-nowrap">{t.riwayat.dateTo}</label>
-            <input type="date" value={to} onChange={(e) => setTo(e.target.value)} className={inputCls} />
-            <select value={method} onChange={(e) => setMethod(e.target.value as MethodFilter)} className={inputCls}>
+            <input
+              type="date"
+              value={to}
+              onChange={(e) => {
+                setTo(e.target.value);
+                setPage(1);
+              }}
+              className={inputCls}
+            />
+            <select
+              value={method}
+              onChange={(e) => {
+                setMethod(e.target.value as MethodFilter);
+                setPage(1);
+              }}
+              className={inputCls}
+            >
               <option value="">{t.riwayat.filterAllMethod}</option>
               <option value="cash">{t.riwayat.methodCash}</option>
               <option value="qris">{t.riwayat.methodQris}</option>
               <option value="debt">{t.riwayat.methodDebt}</option>
             </select>
-            <select value={status} onChange={(e) => setStatus(e.target.value as StatusFilter)} className={inputCls}>
+            <select
+              value={status}
+              onChange={(e) => {
+                setStatus(e.target.value as StatusFilter);
+                setPage(1);
+              }}
+              className={inputCls}
+            >
               <option value="">{t.riwayat.filterAllStatus}</option>
-              <option value="waiting_payment">{t.riwayat.statusWaiting}</option>
-              <option value="paid">{t.riwayat.statusPaid}</option>
-              <option value="debt">{t.riwayat.statusDebt}</option>
-              <option value="cancelled">{t.riwayat.statusCancelled}</option>
+              <option value="Lunas">{t.riwayat.statusPaid}</option>
+              <option value="Hutang">{t.riwayat.statusDebt}</option>
+              <option value="Menunggu Pembayaran">{t.riwayat.statusWaiting}</option>
+              <option value="Dibatalkan">{t.riwayat.statusCancelled}</option>
+              <option value="Draft">{t.riwayat.statusDraft}</option>
             </select>
+            {hasActiveFilter && (
+              <Button size="sm" variant="secondary" onClick={handleResetFilters}>
+                Reset
+              </Button>
+            )}
           </div>
         </div>
 
+        {/* Tabel Riwayat */}
         <Table
-          empty={filtered.length === 0 ? (db.sales.length === 0 ? t.riwayat.empty : t.riwayat.emptySearch) : undefined}
+          empty={
+            !loading && sales.length === 0
+              ? hasActiveFilter
+                ? t.riwayat.emptySearch
+                : t.riwayat.empty
+              : undefined
+          }
           head={
             <>
               <Th>{t.riwayat.tableInvoice}</Th>
@@ -132,29 +264,53 @@ export function RiwayatView({ mineOnly = false }: { mineOnly?: boolean }) {
             </>
           }
         >
-          {filtered.map((s) => (
-            <tr key={s.id} className="hover:bg-zinc-50/70">
-              <Td className="font-medium tabular-nums whitespace-nowrap">{s.invoice_number ?? <span className="text-muted">—</span>}</Td>
-              <Td className="text-muted whitespace-nowrap">{formatDateTime(s.transaction_date)}</Td>
-              <Td className="text-muted whitespace-nowrap">{s.user_name}</Td>
-              <Td className="whitespace-nowrap">{s.customer_name ?? <span className="text-muted">{t.riwayat.noCustomer}</span>}</Td>
-              <Td className="text-center">
-                <Badge variant={methodVariant(s.payment_method)}>{methodLabel(s.payment_method)}</Badge>
-              </Td>
-              <Td className="text-center">
-                <Badge variant={statusVariant(s.status)}>{statusLabel(s.status)}</Badge>
-              </Td>
-              <Td className="text-right tabular-nums font-medium">{formatRupiah(s.total)}</Td>
-              <Td>
-                <div className="flex justify-end">
-                  <Button size="sm" variant="secondary" onClick={() => setDetail(s)}>
-                    {t.common.detail}
-                  </Button>
-                </div>
-              </Td>
+          {loading ? (
+            <tr>
+              <td colSpan={8} className="px-4 py-8 text-center text-muted">
+                {t.common.loading}
+              </td>
             </tr>
-          ))}
+          ) : (
+            sales.map((s) => (
+              <tr key={s.id} className="hover:bg-zinc-50/70">
+                <Td className="font-medium tabular-nums whitespace-nowrap">{s.invoice_number ?? <span className="text-muted">—</span>}</Td>
+                <Td className="text-muted whitespace-nowrap">{formatDateTime(s.transaction_date)}</Td>
+                <Td className="text-muted whitespace-nowrap">{s.user_name}</Td>
+                <Td className="whitespace-nowrap">{s.customer_name ?? <span className="text-muted">{t.riwayat.noCustomer}</span>}</Td>
+                <Td className="text-center">
+                  <Badge variant={methodVariant(s.payment_method)}>{methodLabel(s.payment_method)}</Badge>
+                </Td>
+                <Td className="text-center">
+                  <Badge variant={statusVariant(s.status)}>{statusLabel(s.status)}</Badge>
+                </Td>
+                <Td className="text-right tabular-nums font-medium">{formatRupiah(s.total)}</Td>
+                <Td>
+                  <div className="flex justify-end">
+                    <Button size="sm" variant="secondary" onClick={() => handleOpenDetail(s)}>
+                      {t.common.detail}
+                    </Button>
+                  </div>
+                </Td>
+              </tr>
+            ))
+          )}
         </Table>
+
+        {/* Pagination Server-side */}
+        {!loading && totalItems > 0 && (
+          <Pagination
+            currentPage={page}
+            totalPages={totalPages}
+            totalItems={totalItems}
+            pageSize={pageSize}
+            pageSizeOptions={[10, 25, 50]}
+            onPageChange={setPage}
+            onPageSizeChange={(newSize) => {
+              setPageSize(newSize);
+              setPage(1);
+            }}
+          />
+        )}
       </Card>
 
       {/* Modal Detail Transaksi (SALE_DETAILS) */}
@@ -164,8 +320,7 @@ export function RiwayatView({ mineOnly = false }: { mineOnly?: boolean }) {
         title={`${t.riwayat.detailTitle} — ${detail?.invoice_number ?? ""}`}
         footer={
           <>
-            {/* M-4: struk dapat dicetak ulang dari riwayat (transaksi selesai saja). */}
-            {detail && (detail.status === "paid" || detail.status === "debt") && (
+            {detail && (detail.status.toLowerCase() === "lunas" || detail.status.toLowerCase() === "paid" || detail.status.toLowerCase() === "hutang" || detail.status.toLowerCase() === "debt") && (
               <Button variant="secondary" onClick={() => setReceipt(detail)}>
                 {t.struk.print}
               </Button>
@@ -236,3 +391,4 @@ export function RiwayatView({ mineOnly = false }: { mineOnly?: boolean }) {
     </DashboardLayout>
   );
 }
+

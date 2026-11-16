@@ -3,11 +3,12 @@
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 import { useLang } from "@/lib/i18n/LanguageContext";
-import { useDb, type Sale } from "@/lib/mock/db";
+import { useStoreSettings } from "@/lib/use-store-settings";
 import { formatRupiah, formatDateTime } from "@/lib/format";
+import type { SerializedSale } from "@/lib/sales-api";
 
 interface ReceiptModalProps {
-  sale: Sale | null;
+  sale: SerializedSale | null;
   open: boolean;
   onClose: () => void;
 }
@@ -17,7 +18,7 @@ interface ReceiptModalProps {
 // identitas toko dari STORE_SETTINGS. Area .print-area yang dicetak (lihat globals.css).
 export function ReceiptModal({ sale, open, onClose }: ReceiptModalProps) {
   const { t } = useLang();
-  const db = useDb(); // STORE_SETTINGS untuk nama/alamat/telepon/info struk
+  const settings = useStoreSettings(); // STORE_SETTINGS backend: nama/alamat/telepon/info struk
 
   const s = t.struk;
   const methodLabel =
@@ -30,9 +31,8 @@ export function ReceiptModal({ sale, open, onClose }: ReceiptModalProps) {
           : "—";
 
   // Info hutang (DEBT_RECORD terkait) — hanya untuk transaksi Hutang.
-  const debt = sale?.payment_method === "debt"
-    ? db.debts.find((d) => d.sale_id === sale.id) ?? null
-    : null;
+  const debt = sale?.payment_method === "debt" ? (sale.debt_record ?? null) : null;
+
 
   return (
     <Modal
@@ -52,9 +52,9 @@ export function ReceiptModal({ sale, open, onClose }: ReceiptModalProps) {
         <div className="print-area mx-auto max-w-[300px] bg-white text-zinc-900 font-mono text-[12px] leading-snug p-4 rounded-lg border border-line">
           {/* Identitas toko (STORE_SETTINGS) */}
           <div className="text-center space-y-0.5">
-            <p className="text-[14px] font-bold tracking-wide">{db.settings.store_name}</p>
-            {db.settings.address && <p>{db.settings.address}</p>}
-            {db.settings.phone && <p>{db.settings.phone}</p>}
+            <p className="text-[14px] font-bold tracking-wide">{settings.store_name}</p>
+            {settings.address && <p>{settings.address}</p>}
+            {settings.phone && <p>{settings.phone}</p>}
           </div>
 
           <div className="border-t border-dashed border-zinc-400 my-2" />
@@ -149,8 +149,8 @@ export function ReceiptModal({ sale, open, onClose }: ReceiptModalProps) {
           <div className="border-t border-dashed border-zinc-400 my-2" />
 
           <p className="text-center">{s.thanks}</p>
-          {db.settings.receipt_info && (
-            <p className="text-center text-zinc-500 mt-1">{db.settings.receipt_info}</p>
+          {settings.receipt_info && (
+            <p className="text-center text-zinc-500 mt-1">{settings.receipt_info}</p>
           )}
         </div>
       )}

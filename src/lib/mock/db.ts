@@ -9,7 +9,7 @@
 // signature fungsi sengaja menyerupai repository (getX / addX / updateX).
 // ============================================================================
 
-import { useEffect, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 import { getUsers, type StoreUser } from "./users";
 
 export type { StoreUser };

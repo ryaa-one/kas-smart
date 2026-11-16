@@ -25,7 +25,9 @@ export function BarcodeScanner({ open, onDetected, onClose }: BarcodeScannerProp
   const cancelledRef = useRef(false);
   const lastRef = useRef<{ text: string; at: number }>({ text: "", at: 0 });
   const onDetectedRef = useRef(onDetected);
-  onDetectedRef.current = onDetected;
+  useEffect(() => {
+    onDetectedRef.current = onDetected;
+  }, [onDetected]);
   const [status, setStatus] = useState<ScannerStatus>("starting");
   const [errorMessage, setErrorMessage] = useState("");
 
@@ -38,6 +40,16 @@ export function BarcodeScanner({ open, onDetected, onClose }: BarcodeScannerProp
     controlsRef.current = null;
     readerRef.current = null;
   }, []);
+
+  const errorFor = (err: unknown): string => {
+    if (typeof navigator !== "undefined" && !navigator.mediaDevices?.getUserMedia) {
+      return t.scanner.errorInsecure;
+    }
+    const name = err instanceof Error ? err.name : "";
+    if (name === "NotAllowedError") return t.scanner.errorPermission;
+    if (name === "NotFoundError" || name === "OverconstrainedError") return t.scanner.errorNoCamera;
+    return t.scanner.errorUnknown;
+  };
 
   const startScanner = useCallback(async () => {
     stopScanner();
@@ -74,16 +86,6 @@ export function BarcodeScanner({ open, onDetected, onClose }: BarcodeScannerProp
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stopScanner]);
-
-  const errorFor = (err: unknown): string => {
-    if (typeof navigator !== "undefined" && !navigator.mediaDevices?.getUserMedia) {
-      return t.scanner.errorInsecure;
-    }
-    const name = err instanceof Error ? err.name : "";
-    if (name === "NotAllowedError") return t.scanner.errorPermission;
-    if (name === "NotFoundError" || name === "OverconstrainedError") return t.scanner.errorNoCamera;
-    return t.scanner.errorUnknown;
-  };
 
   // Mulai / hentikan stream saat modal dibuka-tutup ATAU komponen unmount.
   useEffect(() => {

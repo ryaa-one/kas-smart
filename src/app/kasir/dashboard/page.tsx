@@ -1,43 +1,47 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useState } from "react";
 import { useLang } from "@/lib/i18n/LanguageContext";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Card } from "@/components/ui/Card";
 import { StatCard } from "@/components/ui/StatCard";
-import { useAuth } from "@/lib/auth";
 import { formatRupiah, formatDateTime } from "@/lib/format";
-import { useDb, isSaleCompleted, activityLabelAction } from "@/lib/mock/db";
+import type { KasirDashboardData } from "@/lib/dashboard-api";
 
 // Dashboard Kasir (PRD FR-02): Penjualan Hari Ini, Jumlah Transaksi Hari Ini,
 // Shortcut Mulai Transaksi, Aktivitas Hari Ini.
-// ponytail: "hari ini" = tanggal terakhir di mock — ganti filter DATE(now) saat backend ada.
+// Terintegrasi penuh dengan backend database (GET /api/dashboard).
 export default function KasirDashboardPage() {
   const { t } = useLang();
-  const { user } = useAuth();
-  const db = useDb(); // store bersama: transaksi & log milik kasir login
 
-  // PRD FR-02 (Kasir): statistik hanya dari SALES_TRANSACTIONS milik user login
-  // (user_id session — bukan nama hardcoded, H-3).
-  const { salesToday, countToday } = useMemo(() => {
-  const mine = db.sales.filter((s) => s.user_id === user?.id && isSaleCompleted(s));
-  const latestDate = mine.reduce(
-  (max, s) => (s.transaction_date > max ? s.transaction_date : max),
-  ""
-  );
-  const todaySales = mine.filter(
-  (s) => s.transaction_date.slice(0, 10) === latestDate.slice(0, 10)
-  );
-  return {
-  salesToday: todaySales.reduce((sum, s) => sum + s.total, 0),
-  countToday: todaySales.length,
-  };
-  }, [db.sales, user]);
+  const [dashboard, setDashboard] = useState<KasirDashboardData | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  const activities = useMemo(
-  () => db.logs.filter((l) => l.user_id === user?.id).slice(0, 8),
-  [db.logs, user]
-  );
+  useEffect(() => {
+    let active = true;
+    async function loadKasirDashboard() {
+      try {
+        const res = await fetch("/api/dashboard");
+        if (!res.ok) return;
+        const json = await res.json();
+        if (active && json?.data?.role === "Kasir") {
+          setDashboard(json.data);
+        }
+      } catch (err) {
+        console.error("Gagal memuat dashboard kasir:", err);
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+    loadKasirDashboard();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const salesToday = dashboard?.stats?.salesToday ?? 0;
+  const countToday = dashboard?.stats?.countToday ?? 0;
+  const activities = dashboard?.activities ?? [];
 
   return (
     <DashboardLayout title={t.kasirDashboard.title} subtitle={t.kasirDashboard.subtitle}>
@@ -106,7 +110,7 @@ export default function KasirDashboardPage() {
               >
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-foreground">
-                    {activityLabelAction(db, a.action)}
+                    {a.action_label}
                   </p>
                   <p className="text-xs text-muted truncate">{a.description}</p>
                 </div>

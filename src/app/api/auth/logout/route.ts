@@ -2,7 +2,6 @@
 import { prisma } from "@/lib/prisma";
 import {
   clearedSessionCookieHeader,
-  fail,
   getSession,
   ok,
 } from "@/lib/api-auth";

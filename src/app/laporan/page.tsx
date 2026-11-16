@@ -1,57 +1,53 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useLang } from "@/lib/i18n/LanguageContext";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Card } from "@/components/ui/Card";
 import { StatCard } from "@/components/ui/StatCard";
 import { Table, Th, Td } from "@/components/ui/Table";
 import { formatDate, formatRupiah } from "@/lib/format";
-import {
-  useDb,
-  getDb,
-  purchaseTotal,
-  isSaleCompleted,
-  type Purchase,
-} from "@/lib/mock/db";
+import type { ReportTab, ReportResponseData } from "@/lib/report-api";
 
-type Tab = "sales" | "purchases" | "profit" | "stock" | "suppliers" | "debt" | "adjustments";
-
-// FR-15: 7 laporan, difilter berdasarkan tanggal. Data dihitung dari mock sales/purchases/adjustments.
 export default function LaporanPage() {
   const { t } = useLang();
-  const db = useDb(); // semua laporan dari store bersama (H-7)
 
-  const [tab, setTab] = useState<Tab>("sales");
+  const [tab, setTab] = useState<ReportTab>("sales");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  const [reportData, setReportData] = useState<ReportResponseData | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  const inRange = (iso: string) => {
-    const d = iso.slice(0, 10);
-    return (!from || d >= from) && (!to || d <= to);
-  };
-
-  const sales = useMemo(() => db.sales.filter((s) => isSaleCompleted(s) && inRange(s.transaction_date)), [db.sales, from, to]);
-  const purchases = useMemo(() => db.purchases.filter((p) => inRange(p.purchase_date)), [db.purchases, from, to]);
-
-  // Profit kotor = penjualan (lunas + hutang tercatat) - modal dari harga beli produk.
-  const paidSales = sales.filter((s) => isSaleCompleted(s));
-  const salesRevenue = paidSales.reduce((s, x) => s + x.total, 0);
-  const salesCost = paidSales.reduce(
-    (s, x) =>
-      s +
-      x.details.reduce((d, item) => {
-        const p = db.products.find((mp) => mp.id === item.product_id);
-        return d + (p?.purchase_price ?? 0) * item.quantity;
-      }, 0),
-    0
-  );
-  const grossProfit = salesRevenue - salesCost;
+  useEffect(() => {
+    let active = true;
+    async function loadReport() {
+      setLoading(true);
+      try {
+        const params = new URLSearchParams({ tab });
+        if (from) params.set("from", from);
+        if (to) params.set("to", to);
+        const res = await fetch(`/api/reports?${params.toString()}`);
+        if (!res.ok) return;
+        const json = await res.json();
+        if (active && json?.data) {
+          setReportData(json.data);
+        }
+      } catch (err) {
+        console.error("Gagal memuat laporan:", err);
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+    loadReport();
+    return () => {
+      active = false;
+    };
+  }, [tab, from, to]);
 
   const inputCls =
     "px-3 py-2 rounded-lg border border-line bg-white text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/10";
 
-  const tabs: { key: Tab; label: string }[] = [
+  const tabs: { key: ReportTab; label: string }[] = [
     { key: "sales", label: t.laporan.tabSales },
     { key: "purchases", label: t.laporan.tabPurchases },
     { key: "profit", label: t.laporan.tabProfit },
@@ -61,33 +57,37 @@ export default function LaporanPage() {
     { key: "adjustments", label: t.laporan.tabAdjustments },
   ];
 
-  const debtTotals = useMemo(() => {
-    const total = db.debts.reduce((s, d) => s + d.total_debt, 0);
-    const remaining = db.debts.reduce((s, d) => s + d.remaining_debt, 0);
-    return { total, remaining, paid: total - remaining };
-  }, [db.debts]);
-
-  const supplierRows = useMemo(() => {
-    const map = new Map<string, { count: number; total: number }>();
-    purchases.forEach((p: Purchase) => {
-      // Supplier opsional (ERD): pembelian tanpa supplier tidak masuk rekap supplier.
-      const name = p.supplier_id ? getDb().suppliers.find((s) => s.id === p.supplier_id)?.name ?? "-" : null;
-      if (!name) return;
-      const cur = map.get(name) ?? { count: 0, total: 0 };
-      map.set(name, { count: cur.count + 1, total: cur.total + purchaseTotal(p) });
-    });
-    return [...map.entries()].map(([name, v]) => ({ name, ...v }));
-  }, [purchases]);
-
   return (
     <DashboardLayout title={t.laporan.title} subtitle={t.laporan.subtitle}>
       <Card className="mb-4">
-        {/* Filter tanggal (FR-15) */}
+        {/* Filter tanggal (FR-15 / UC-19) */}
         <div className="flex flex-wrap items-center gap-2">
           <label className="text-xs text-muted">{t.laporan.dateFrom}</label>
-          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className={inputCls} />
+          <input
+            type="date"
+            value={from}
+            onChange={(e) => setFrom(e.target.value)}
+            className={inputCls}
+          />
           <label className="text-xs text-muted">{t.laporan.dateTo}</label>
-          <input type="date" value={to} onChange={(e) => setTo(e.target.value)} className={inputCls} />
+          <input
+            type="date"
+            value={to}
+            onChange={(e) => setTo(e.target.value)}
+            className={inputCls}
+          />
+          {(from || to) && (
+            <button
+              type="button"
+              onClick={() => {
+                setFrom("");
+                setTo("");
+              }}
+              className="px-2.5 py-1.5 text-xs text-muted hover:text-foreground hover:bg-zinc-100 rounded-lg transition-colors"
+            >
+              Reset
+            </button>
+          )}
         </div>
       </Card>
 
@@ -109,26 +109,26 @@ export default function LaporanPage() {
         ))}
       </div>
 
-      {/* ===== Laporan Penjualan ===== */}
+      {/* ===== 1. Laporan Penjualan ===== */}
       {tab === "sales" && (
         <>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
             <StatCard
               icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16v10H4zM9 18h6M12 14v4" /></svg>}
               label={t.laporan.salesTotal}
-              value={formatRupiah(salesRevenue)}
+              value={formatRupiah(reportData?.sales?.revenue ?? 0)}
             />
             <StatCard
               icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 4v8l5 3M12 21a9 9 0 110-18 9 9 0 010 18z" /></svg>}
               label={t.laporan.salesCount}
-              value={sales.length}
+              value={reportData?.sales?.count ?? 0}
               bgColor="bg-blue-600/10"
               iconColor="text-blue-600"
             />
             <StatCard
               icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3l4 4 4-4 3 3-7 7-7-7 3-3zM12 17v4M8 19h8" /></svg>}
               label={t.laporan.salesDebtCount}
-              value={sales.filter((s) => s.payment_method === "debt").length}
+              value={reportData?.sales?.debtCount ?? 0}
               bgColor="bg-rose-600/10"
               iconColor="text-rose-600"
             />
@@ -145,9 +145,9 @@ export default function LaporanPage() {
                 </>
               }
             >
-              {sales.map((s) => (
+              {(reportData?.sales?.rows ?? []).map((s) => (
                 <tr key={s.id} className="hover:bg-zinc-50/70">
-                  <Td className="font-medium tabular-nums whitespace-nowrap">{s.invoice_number ?? "—"}</Td>
+                  <Td className="font-medium tabular-nums whitespace-nowrap">{s.invoice_number}</Td>
                   <Td className="text-muted whitespace-nowrap">{formatDate(s.transaction_date)}</Td>
                   <Td className="text-muted whitespace-nowrap">{s.user_name}</Td>
                   <Td className="text-right tabular-nums font-medium">{formatRupiah(s.total)}</Td>
@@ -158,19 +158,19 @@ export default function LaporanPage() {
         </>
       )}
 
-      {/* ===== Laporan Pembelian ===== */}
+      {/* ===== 2. Laporan Pembelian ===== */}
       {tab === "purchases" && (
         <>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
             <StatCard
               icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M6 4h12v3H6zM4 7h16l1 4H3l1-4zM4 11h16v9H4zM9 14h6" /></svg>}
               label={t.laporan.purchaseTotal}
-              value={formatRupiah(purchases.reduce((s, p) => s + purchaseTotal(p), 0))}
+              value={formatRupiah(reportData?.purchases?.total ?? 0)}
             />
             <StatCard
               icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 4v8l5 3M12 21a9 9 0 110-18 9 9 0 010 18z" /></svg>}
               label={t.laporan.purchaseCount}
-              value={purchases.length}
+              value={reportData?.purchases?.count ?? 0}
               bgColor="bg-blue-600/10"
               iconColor="text-blue-600"
             />
@@ -188,15 +188,13 @@ export default function LaporanPage() {
                 </>
               }
             >
-              {purchases.map((p) => (
+              {(reportData?.purchases?.rows ?? []).map((p) => (
                 <tr key={p.id} className="hover:bg-zinc-50/70">
                   <Td className="font-medium tabular-nums whitespace-nowrap">{p.id}</Td>
-                  <Td className="whitespace-nowrap">{p.supplier_id ? getDb().suppliers.find((s) => s.id === p.supplier_id)?.name ?? "-" : t.pembelian.noSupplier}</Td>
+                  <Td className="whitespace-nowrap">{p.supplier_name}</Td>
                   <Td className="text-muted whitespace-nowrap">{formatDate(p.purchase_date)}</Td>
-                  <Td className="text-center tabular-nums text-muted">
-                    {p.details.reduce((s, d) => s + d.quantity, 0)}
-                  </Td>
-                  <Td className="text-right tabular-nums font-medium">{formatRupiah(purchaseTotal(p))}</Td>
+                  <Td className="text-center tabular-nums text-muted">{p.items_count}</Td>
+                  <Td className="text-right tabular-nums font-medium">{formatRupiah(p.total)}</Td>
                 </tr>
               ))}
             </Table>
@@ -204,65 +202,65 @@ export default function LaporanPage() {
         </>
       )}
 
-      {/* ===== Laporan Profit (kotor: penjualan - modal harga beli) ===== */}
+      {/* ===== 3. Laporan Profit (kotor: penjualan - modal harga beli) ===== */}
       {tab === "profit" && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           <StatCard
             icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16v10H4zM9 18h6M12 14v4" /></svg>}
             label={t.laporan.profitSales}
-            value={formatRupiah(salesRevenue)}
+            value={formatRupiah(reportData?.profit?.salesRevenue ?? 0)}
           />
           <StatCard
             icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6" /></svg>}
             label={t.laporan.profitCost}
-            value={formatRupiah(salesCost)}
+            value={formatRupiah(reportData?.profit?.salesCost ?? 0)}
             bgColor="bg-amber-600/10"
             iconColor="text-amber-600"
           />
           <StatCard
             icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5 21V8M12 21V3M19 21v-9" /></svg>}
             label={t.laporan.profitGross}
-            value={formatRupiah(grossProfit)}
+            value={formatRupiah(reportData?.profit?.grossProfit ?? 0)}
             bgColor="bg-success/10"
             iconColor="text-success"
           />
           <StatCard
             icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 4v8l5 3M12 21a9 9 0 110-18 9 9 0 010 18z" /></svg>}
             label={t.laporan.margin}
-            value={`${salesRevenue > 0 ? Math.round((grossProfit / salesRevenue) * 100) : 0}%`}
+            value={`${reportData?.profit?.margin ?? 0}%`}
             bgColor="bg-purple-600/10"
             iconColor="text-purple-600"
           />
         </div>
       )}
 
-      {/* ===== Laporan Stok (nilai stok per produk, harga beli) ===== */}
+      {/* ===== 4. Laporan Stok (nilai stok per produk, harga beli) ===== */}
       {tab === "stock" && (
         <>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
             <StatCard
               icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l8 4v10l-8 4-8-4V7l8-4z" /></svg>}
               label={t.laporan.stockTotalProducts}
-              value={db.products.length}
+              value={reportData?.stock?.totalProducts ?? 0}
             />
             <StatCard
               icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h10M4 12h16M4 17h10" /></svg>}
               label={t.laporan.stockTotalUnits}
-              value={db.products.reduce((s, p) => s + p.stock, 0)}
+              value={reportData?.stock?.totalUnits ?? 0}
               bgColor="bg-blue-600/10"
               iconColor="text-blue-600"
             />
             <StatCard
               icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6" /></svg>}
               label={t.laporan.stockTotalValue}
-              value={formatRupiah(db.products.reduce((s, p) => s + p.stock * p.purchase_price, 0))}
+              value={formatRupiah(reportData?.stock?.totalValue ?? 0)}
               bgColor="bg-amber-600/10"
               iconColor="text-amber-600"
             />
             <StatCard
               icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z" /></svg>}
               label={t.laporan.stockLowCount}
-              value={db.products.filter((p) => p.stock <= p.minimum_stock).length}
+              value={reportData?.stock?.lowCount ?? 0}
               bgColor="bg-rose-600/10"
               iconColor="text-rose-600"
             />
@@ -279,14 +277,14 @@ export default function LaporanPage() {
                 </>
               }
             >
-              {db.products.map((p) => (
+              {(reportData?.stock?.rows ?? []).map((p) => (
                 <tr key={p.id} className="hover:bg-zinc-50/70">
                   <Td className="font-medium text-foreground">{p.name}</Td>
                   <Td className={`text-center tabular-nums ${p.stock <= p.minimum_stock ? "text-danger font-semibold" : ""}`}>
                     {p.stock}
                   </Td>
                   <Td className="text-center tabular-nums text-muted">{p.minimum_stock}</Td>
-                  <Td className="text-right tabular-nums">{formatRupiah(p.stock * p.purchase_price)}</Td>
+                  <Td className="text-right tabular-nums">{formatRupiah(p.unit_value)}</Td>
                 </tr>
               ))}
             </Table>
@@ -294,7 +292,7 @@ export default function LaporanPage() {
         </>
       )}
 
-      {/* ===== Laporan Supplier (agregat pembelian) ===== */}
+      {/* ===== 5. Laporan Supplier (agregat pembelian) ===== */}
       {tab === "suppliers" && (
         <Card>
           <Table
@@ -307,7 +305,7 @@ export default function LaporanPage() {
               </>
             }
           >
-            {supplierRows.map((s) => (
+            {(reportData?.suppliers?.rows ?? []).map((s) => (
               <tr key={s.name} className="hover:bg-zinc-50/70">
                 <Td className="font-medium text-foreground">{s.name}</Td>
                 <Td className="text-center tabular-nums text-muted">{s.count}</Td>
@@ -318,28 +316,28 @@ export default function LaporanPage() {
         </Card>
       )}
 
-      {/* ===== Laporan Hutang Pelanggan ===== */}
+      {/* ===== 6. Laporan Hutang Pelanggan ===== */}
       {tab === "debt" && (
         <>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
             <StatCard
               icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3l4 4 4-4 3 3-7 7-7-7 3-3zM12 17v4M8 19h8" /></svg>}
               label={t.laporan.debtTotal}
-              value={formatRupiah(debtTotals.total)}
+              value={formatRupiah(reportData?.debt?.total ?? 0)}
               bgColor="bg-rose-600/10"
               iconColor="text-rose-600"
             />
             <StatCard
               icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>}
               label={t.laporan.debtPaid}
-              value={formatRupiah(debtTotals.paid)}
+              value={formatRupiah(reportData?.debt?.paid ?? 0)}
               bgColor="bg-success/10"
               iconColor="text-success"
             />
             <StatCard
               icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z" /></svg>}
               label={t.laporan.debtRemaining}
-              value={formatRupiah(debtTotals.remaining)}
+              value={formatRupiah(reportData?.debt?.remaining ?? 0)}
               bgColor="bg-warning/10"
               iconColor="text-warning"
             />
@@ -356,12 +354,16 @@ export default function LaporanPage() {
                 </>
               }
             >
-              {db.debts.map((d) => (
+              {(reportData?.debt?.rows ?? []).map((d) => (
                 <tr key={d.debt_id} className="hover:bg-zinc-50/70">
                   <Td className="font-medium text-foreground whitespace-nowrap">{d.customer_name}</Td>
-                  <Td className="tabular-nums text-muted whitespace-nowrap">{db.sales.find((s) => s.id === d.sale_id)?.invoice_number ?? d.sale_id}</Td>
+                  <Td className="tabular-nums text-muted whitespace-nowrap">{d.invoice_number}</Td>
                   <Td className="text-right tabular-nums">{formatRupiah(d.total_debt)}</Td>
-                  <Td className={`text-right tabular-nums font-medium ${d.remaining_debt > 0 ? "text-danger" : "text-success"}`}>
+                  <Td
+                    className={`text-right tabular-nums font-medium ${
+                      d.remaining_debt > 0 ? "text-danger" : "text-success"
+                    }`}
+                  >
                     {formatRupiah(d.remaining_debt)}
                   </Td>
                 </tr>
@@ -371,7 +373,7 @@ export default function LaporanPage() {
         </>
       )}
 
-      {/* ===== Laporan Penyesuaian Stok ===== */}
+      {/* ===== 7. Laporan Penyesuaian Stok ===== */}
       {tab === "adjustments" && (
         <Card>
           <Table
@@ -386,26 +388,24 @@ export default function LaporanPage() {
               </>
             }
           >
-            {db.adjustments.flatMap((a) =>
-              a.details.map((d) => (
-                <tr key={`${a.id}-${d.product_id}`} className="hover:bg-zinc-50/70">
-                  <Td className="font-medium tabular-nums whitespace-nowrap">{a.id}</Td>
-                  <Td className="text-muted whitespace-nowrap">{formatDate(a.adjustment_date)}</Td>
-                  <Td className="text-foreground">{d.product_name}</Td>
-                  <Td className="text-center">
-                    <span
-                      className={`tabular-nums font-semibold ${
-                        d.quantity_change > 0 ? "text-success" : "text-danger"
-                      }`}
-                    >
-                      {d.quantity_change > 0 ? "+" : ""}
-                      {d.quantity_change}
-                    </span>
-                  </Td>
-                  <Td className="text-muted whitespace-nowrap">{a.reason}</Td>
-                </tr>
-              ))
-            )}
+            {(reportData?.adjustments?.rows ?? []).map((a, i) => (
+              <tr key={`${a.id}-${i}`} className="hover:bg-zinc-50/70">
+                <Td className="font-medium tabular-nums whitespace-nowrap">{a.id}</Td>
+                <Td className="text-muted whitespace-nowrap">{formatDate(a.adjustment_date)}</Td>
+                <Td className="text-foreground">{a.product_name}</Td>
+                <Td className="text-center">
+                  <span
+                    className={`tabular-nums font-semibold ${
+                      a.quantity_change > 0 ? "text-success" : "text-danger"
+                    }`}
+                  >
+                    {a.quantity_change > 0 ? "+" : ""}
+                    {a.quantity_change}
+                  </span>
+                </Td>
+                <Td className="text-muted whitespace-nowrap">{a.reason}</Td>
+              </tr>
+            ))}
           </Table>
         </Card>
       )}

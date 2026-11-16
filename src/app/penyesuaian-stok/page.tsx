@@ -1,8 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLang } from "@/lib/i18n/LanguageContext";
-import { useAuth } from "@/lib/auth";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -11,21 +10,28 @@ import { Select } from "@/components/ui/Select";
 import { Modal } from "@/components/ui/Modal";
 import { Table, Th, Td } from "@/components/ui/Table";
 import { formatDate } from "@/lib/format";
-import {
-  useDb,
-  addAdjustment,
-  type AdjustmentReason,
-} from "@/lib/mock/db";
+import type { SerializedStockAdjustment } from "@/lib/stock-adjustment-api";
+
+export type AdjustmentReason = "stok_rusak" | "stok_hilang" | "stok_opname" | "lainnya";
 
 const REASONS: AdjustmentReason[] = ["stok_rusak", "stok_hilang", "stok_opname", "lainnya"];
 
+interface ProductOption {
+  id: string;
+  name: string;
+  stock: number;
+  is_active: boolean;
+}
+
 // UC-18 (FR-14): quantity_change = SELISIH stok (bukan stok akhir).
-// Hasil stok = stok saat ini + selisih; ditolak jika < 0; stok produk update (store bersama).
+// Hasil stok = stok saat ini + selisih; ditolak jika < 0; stok produk update di database (PRODUCTS.stock = Single Source of Truth).
 export default function PenyesuaianStokPage() {
   const { t } = useLang();
-  const { user } = useAuth();
-  const db = useDb();
   const p = t.penyesuaianStok;
+
+  const [adjustments, setAdjustments] = useState<SerializedStockAdjustment[]>([]);
+  const [products, setProducts] = useState<ProductOption[]>([]);
+  const [loading, setLoading] = useState(true);
 
   const [formOpen, setFormOpen] = useState(false);
   const [productId, setProductId] = useState("");
@@ -34,20 +40,57 @@ export default function PenyesuaianStokPage() {
   const [note, setNote] = useState("");
   const [errors, setErrors] = useState<{ product?: string; change?: string }>({});
   const [notice, setNotice] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const product = db.products.find((x) => x.id === productId);
+  const loadData = useCallback(async () => {
+    try {
+      const [adjRes, prodRes] = await Promise.all([
+        fetch("/api/stock-adjustments"),
+        fetch("/api/products"),
+      ]);
+
+      if (adjRes.ok) {
+        const data = await adjRes.json();
+        if (data?.data?.adjustments) {
+          setAdjustments(data.data.adjustments);
+        }
+      }
+
+      if (prodRes.ok) {
+        const data = await prodRes.json();
+        if (data?.data?.products) {
+          setProducts(data.data.products);
+        }
+      }
+    } catch (err) {
+      console.error("Gagal memuat data penyesuaian stok:", err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  const product = products.find((x) => x.id === productId);
   const nChange = parseInt(change, 10);
-  const resultStock = product ? product.stock + (nChange || 0) : null;
+  const resultStock = product ? product.stock + (Number.isInteger(nChange) ? nChange : 0) : null;
 
-  const reasonLabel = (r: AdjustmentReason) =>
-    ({
-      stok_rusak: p.reasonStokRusak,
-      stok_hilang: p.reasonStokHilang,
-      stok_opname: p.reasonStokOpname,
-      lainnya: p.reasonLainnya,
-    } as Record<AdjustmentReason, string>)[r];
+  const reasonLabel = (r: string) => {
+    const [baseReason, ...rest] = r.split(" — ");
+    const baseLabel =
+      ({
+        stok_rusak: p.reasonStokRusak,
+        stok_hilang: p.reasonStokHilang,
+        stok_opname: p.reasonStokOpname,
+        lainnya: p.reasonLainnya,
+      } as Record<string, string>)[baseReason] || baseReason;
 
-  const rows = useMemo(() => [...db.adjustments].reverse(), [db.adjustments]);
+    return rest.length > 0 ? `${baseLabel} — ${rest.join(" — ")}` : baseLabel;
+  };
+
+  const rows = useMemo(() => adjustments, [adjustments]);
 
   const openForm = () => {
     setProductId("");
@@ -58,25 +101,58 @@ export default function PenyesuaianStokPage() {
     setFormOpen(true);
   };
 
-  const submit = () => {
+  const submit = async () => {
     const e: typeof errors = {};
     if (!productId) e.product = p.errorProductRequired;
     if (!Number.isFinite(nChange) || nChange === 0) e.change = p.errorQuantityZero;
-    else if (product && product.stock + nChange < 0)
+    else if (product && product.stock + nChange < 0) {
       e.change = p.errorNegativeResult
         .replace("{stock}", String(product.stock))
         .replace("{min}", String(-product.stock));
+    }
     setErrors(e);
-    if (Object.keys(e).length || !user || !product) return;
+    if (Object.keys(e).length || !product || isSubmitting) return;
 
-    addAdjustment({ id: user.id, name: user.name }, productId, nChange, reason, note.trim());
-    setFormOpen(false);
-    setNotice(p.successSaved ?? "OK");
-    setTimeout(() => setNotice(""), 3000);
+    setIsSubmitting(true);
+    try {
+      const res = await fetch("/api/stock-adjustments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reason,
+          note: note.trim(),
+          details: [
+            {
+              product_id: productId,
+              quantity_change: nChange,
+            },
+          ],
+        }),
+      });
+
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        const errMsg =
+          data?.error === "stock_insufficient"
+            ? p.errorNegativeResult
+                .replace("{stock}", String(product.stock))
+                .replace("{min}", String(-product.stock))
+            : data?.message || data?.error || "Gagal menyimpan penyesuaian stok";
+        setErrors({ change: errMsg });
+        return;
+      }
+
+      await loadData();
+      setFormOpen(false);
+      setNotice(p.successSaved ?? "Penyesuaian stok berhasil disimpan");
+      setTimeout(() => setNotice(""), 3000);
+    } catch {
+      setErrors({ change: "Terjadi kesalahan jaringan" });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
-
-  const inputCls =
-    "px-3 py-2 rounded-lg border border-line bg-white text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/10";
 
   return (
     <DashboardLayout title={p.title} subtitle={p.subtitle}>
@@ -98,7 +174,7 @@ export default function PenyesuaianStokPage() {
         </div>
 
         <Table
-          empty={p.empty}
+          empty={loading ? "Memuat data penyesuaian stok..." : rows.length === 0 ? p.empty : p.empty}
           head={
             <>
               <Th>{p.tableId}</Th>
@@ -117,7 +193,7 @@ export default function PenyesuaianStokPage() {
               <Td className="whitespace-nowrap">{a.details.map((d) => d.product_name).join(", ")}</Td>
               <Td className="text-center">
                 {a.details.map((d) => (
-                  <div key={d.product_id} className="tabular-nums font-medium">
+                  <div key={d.product_id || d.id} className="tabular-nums font-medium">
                     <span className={d.quantity_change >= 0 ? "text-success" : "text-danger"}>
                       {d.quantity_change >= 0 ? `+${d.quantity_change}` : d.quantity_change}
                     </span>
@@ -137,10 +213,12 @@ export default function PenyesuaianStokPage() {
         title={p.addTitle}
         footer={
           <>
-            <Button variant="secondary" onClick={() => setFormOpen(false)}>
+            <Button variant="secondary" onClick={() => setFormOpen(false)} disabled={isSubmitting}>
               {t.common.cancel}
             </Button>
-            <Button onClick={submit}>{t.common.save}</Button>
+            <Button onClick={submit} disabled={isSubmitting}>
+              {isSubmitting ? "Menyimpan..." : t.common.save}
+            </Button>
           </>
         }
       >
@@ -155,11 +233,13 @@ export default function PenyesuaianStokPage() {
             error={errors.product}
           >
             <option value="">{p.selectProduct}</option>
-            {db.products.map((x) => (
-              <option key={x.id} value={x.id}>
-                {x.name}
-              </option>
-            ))}
+            {products
+              .filter((x) => x.is_active)
+              .map((x) => (
+                <option key={x.id} value={x.id}>
+                  {x.name}
+                </option>
+              ))}
           </Select>
 
           {product && (

@@ -4,7 +4,6 @@ import { usePathname } from "next/navigation";
 import { useLang } from "@/lib/i18n/LanguageContext";
 import { useAuth } from "@/lib/auth";
 import { Logo } from "./Logo";
-import { LanguageSwitcher } from "@/components/ui/LanguageSwitcher";
 
 // Sidebar per role sesuai PRD:
 // 8. Sidebar Kasir: Dashboard, Kasir, Hutang Pelanggan (lihat dan bayar),
@@ -115,7 +114,6 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         </nav>
 
         <div className="px-5 py-4 border-t border-line space-y-3">
-          <LanguageSwitcher />
           <div className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg bg-primary/10`}>
             <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center text-xs font-bold text-white">
               {(user?.name ?? "O").charAt(0).toUpperCase()}

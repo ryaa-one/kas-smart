@@ -8,7 +8,6 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Badge } from "@/components/ui/Badge";
 import { useAuth } from "@/lib/auth";
-import { logActivity } from "@/lib/mock/db";
 
 interface ProfileForm {
   name: string;
@@ -112,12 +111,6 @@ export default function ProfilSayaPage() {
         });
         return;
       }
-      // Sinkron ringan: mock log utk widget aktivitas; nama tampil ikut ter-update.
-      logActivity(
-        { id: user.id, name: form.name.trim() || user.name },
-        "profileChange",
-        "Perbarui profil saya"
-      );
       await refreshUser();
       setForm((f) => ({
         ...f,

@@ -8,16 +8,18 @@ import { Card } from "@/components/ui/Card";
 import { StatCard } from "@/components/ui/StatCard";
 import { BarChart } from "@/components/dashboard/BarChart";
 import { DASHBOARD_CHARTS_CONFIG, type DashboardChartPoint } from "@/components/dashboard/chart-config";
-import { useDb, isSaleCompleted, cashierUsers, activityLabelAction } from "@/lib/mock/db";
 import type { PurchaseData } from "@/lib/purchase-api";
+import type { OwnerDashboardData } from "@/lib/dashboard-api";
 
-// FR-01: ringkasan penjualan, profit, stok, hutang, grafik, aktivitas —
-// semuanya DIHITUNG dari store bersama (C-3), bukan mock statis per halaman.
-// "Hari ini" = tanggal transaksi terbaru di store (ponytail: ganti DATE(now) saat backend).
 export default function DashboardPage() {
   const { t, lang } = useLang();
   const { user } = useAuth();
-  const db = useDb();
+
+  const [dashboard, setDashboard] = useState<OwnerDashboardData | null>(null);
+  const [, setLoading] = useState(true);
+
+  // Data pembelian dari backend database (/api/purchases) khusus untuk Grafik Pembelian (Tahap 12)
+  const [backendPurchases, setBackendPurchases] = useState<PurchaseData[]>([]);
 
   const fmt = (n: number) =>
     new Intl.NumberFormat(lang === "id" ? "id-ID" : "en-US", {
@@ -27,78 +29,27 @@ export default function DashboardPage() {
       maximumFractionDigits: 0,
     }).format(n);
 
-  const today = useMemo(() => {
-    const completed = db.sales.filter(isSaleCompleted);
-    const latest = completed.reduce(
-      (max, s) => (s.transaction_date > max ? s.transaction_date : max),
-      ""
-    );
-    const day = latest.slice(0, 10);
-    const todays = completed.filter((s) => s.transaction_date.slice(0, 10) === day);
-    const salesToday = todays.reduce((sum, s) => sum + s.total, 0);
-    // Profit = penjualan - HPP (unit_purchase_price produk terkait).
-    const cogs = todays.reduce(
-      (sum, s) =>
-        sum +
-        s.details.reduce((acc, d) => {
-          const p = db.products.find((x) => x.id === d.product_id);
-          return acc + d.quantity * (p?.purchase_price ?? 0);
-        }, 0),
-      0
-    );
-    return { salesToday, profitToday: salesToday - cogs };
-  }, [db.sales, db.products]);
-
-  const stats = {
-    salesToday: today.salesToday,
-    profitToday: today.profitToday,
-    totalProducts: db.products.filter((p) => p.is_active).length,
-    totalSuppliers: db.suppliers.length,
-    totalCashiers: cashierUsers().length,
-    totalDebt: db.debts.reduce((s, d) => s + d.remaining_debt, 0),
-  };
-
-  // Grafik mingguan (Senin–Minggu minggu berjalan) dari transaksi selesai.
-  const weekAgg = useMemo(() => {
-    const now = new Date();
-    const monday = new Date(now);
-    const dow = (now.getDay() + 6) % 7; // 0 = Senin
-    monday.setDate(now.getDate() - dow);
-    monday.setHours(0, 0, 0, 0);
-    const buckets = Array.from({ length: 7 }, () => ({ sales: 0, purchase: 0 }));
-    const inWeek = (iso: string) => {
-      const d = new Date(iso);
-      const diff = Math.floor((d.getTime() - monday.getTime()) / 86400000);
-      return diff >= 0 && diff < 7 ? diff : -1;
+  useEffect(() => {
+    let active = true;
+    async function loadDashboard() {
+      try {
+        const res = await fetch("/api/dashboard");
+        if (!res.ok) return;
+        const json = await res.json();
+        if (active && json?.data?.role === "Owner") {
+          setDashboard(json.data);
+        }
+      } catch (err) {
+        console.error("Gagal memuat dashboard:", err);
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+    loadDashboard();
+    return () => {
+      active = false;
     };
-    for (const s of db.sales.filter(isSaleCompleted)) {
-      const i = inWeek(s.transaction_date);
-      if (i >= 0) buckets[i].sales += s.total;
-    }
-    for (const p of db.purchases) {
-      const i = inWeek(p.purchase_date);
-      if (i >= 0) buckets[i].purchase += p.details.reduce((x, d) => x + d.quantity * d.unit_purchase_price, 0);
-    }
-    const salesChart: DashboardChartPoint[] = buckets.map((b, i) => ({
-      day: t.dashboard.weekDays[i] ?? `H${i + 1}`,
-      value: Number((b.sales / 1e6).toFixed(2)),
-      rawAmount: b.sales,
-    }));
-    const purchaseChart: DashboardChartPoint[] = buckets.map((b, i) => ({
-      day: t.dashboard.weekDays[i] ?? `H${i + 1}`,
-      value: Number((b.purchase / 1e6).toFixed(2)),
-      rawAmount: b.purchase,
-    }));
-    const profitChart: DashboardChartPoint[] = buckets.map((b, i) => ({
-      day: t.dashboard.weekDays[i] ?? `H${i + 1}`,
-      value: Number(((b.sales - b.purchase) / 1e6).toFixed(2)),
-      rawAmount: b.sales - b.purchase,
-    }));
-    return { salesChart, profitChart, purchaseChart };
-  }, [db.sales, db.purchases, t.dashboard.weekDays]);
-
-  // Data pembelian dari backend database (/api/purchases) khusus untuk Grafik Pembelian
-  const [backendPurchases, setBackendPurchases] = useState<PurchaseData[]>([]);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -138,9 +89,10 @@ export default function DashboardPage() {
     for (const p of backendPurchases) {
       const i = inWeek(p.purchase_date);
       if (i >= 0) {
-        const total = typeof p.total === "number"
-          ? p.total
-          : p.details?.reduce((sum, d) => sum + d.quantity * d.unit_purchase_price, 0) ?? 0;
+        const total =
+          typeof p.total === "number"
+            ? p.total
+            : p.details?.reduce((sum, d) => sum + d.quantity * d.unit_purchase_price, 0) ?? 0;
         buckets[i] += total;
       }
     }
@@ -153,30 +105,44 @@ export default function DashboardPage() {
     return points;
   }, [backendPurchases, t.dashboard.weekDays]);
 
-  // Stok menipis dari PRODUCTS store (stok <= minimum_stock, aktif).
-  const lowStock = useMemo(
-    () =>
-      db.products
-        .filter((p) => p.is_active && p.stock <= p.minimum_stock)
-        .sort((a, b) => a.stock - b.stock)
-        .slice(0, 5)
-        .map((p) => ({
-          id: p.id,
-          name: p.name,
-          category: db.categories.find((c) => c.id === p.category_id)?.name ?? "-",
-          stock: p.stock,
-          minimumStock: p.minimum_stock,
-        })),
-    [db.products, db.categories]
-  );
+  const stats = dashboard?.stats ?? {
+    salesToday: 0,
+    profitToday: 0,
+    cashToday: 0,
+    qrisToday: 0,
+    totalProducts: 0,
+    totalSuppliers: 0,
+    totalCashiers: 0,
+    totalDebt: 0,
+  };
 
-  // Aktivitas terbaru dari ACTIVITY_LOGS store.
-  const activities = db.logs.slice(0, 8);
+  const salesList = dashboard?.charts?.sales;
+  const profitList = dashboard?.charts?.profit;
+  const weekDays = t.dashboard.weekDays;
+
+  const salesChart = useMemo(() => {
+    if (!salesList) return [];
+    return salesList.map((pt, i) => ({
+      ...pt,
+      day: weekDays[i] ?? pt.day,
+    }));
+  }, [salesList, weekDays]);
+
+  const profitChart = useMemo(() => {
+    if (!profitList) return [];
+    return profitList.map((pt, i) => ({
+      ...pt,
+      day: weekDays[i] ?? pt.day,
+    }));
+  }, [profitList, weekDays]);
+
+  const lowStock = dashboard?.lowStock ?? [];
+  const activities = dashboard?.activities ?? [];
 
   return (
     <DashboardLayout title={t.dashboard.title} subtitle={t.dashboard.subtitle}>
       {/* Stat Cards Row */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
+      <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-3 mb-6">
         <StatCard
           icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16v10H4zM9 18h6M12 14v4"/></svg>}
           label={t.dashboard.statSalesToday}
@@ -186,6 +152,20 @@ export default function DashboardPage() {
           icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5 21V8M12 21V3M19 21v-9"/></svg>}
           label={t.dashboard.statProfitToday}
           value={fmt(stats.profitToday)}
+        />
+        <StatCard
+          icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M6 12h.01M18 12h.01"/></svg>}
+          label={t.dashboard.statCashToday}
+          value={fmt(stats.cashToday)}
+          bgColor="bg-emerald-600/10"
+          iconColor="text-emerald-600"
+        />
+        <StatCard
+          icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M7 7h.01M17 7h.01M7 17h.01M17 17h.01"/></svg>}
+          label={t.dashboard.statQrisToday}
+          value={fmt(stats.qrisToday)}
+          bgColor="bg-indigo-600/10"
+          iconColor="text-indigo-600"
         />
         <StatCard
           icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l8 4v10l-8 4-8-4V7l8-4zM12 12l8-5M12 12L4 7M12 12v9"/></svg>}
@@ -222,7 +202,7 @@ export default function DashboardPage() {
         <Card>
           <h3 className="text-sm font-semibold text-foreground mb-4">{t.dashboard.salesChartTitle}</h3>
           <BarChart
-            data={weekAgg.salesChart}
+            data={salesChart}
             color={DASHBOARD_CHARTS_CONFIG.sales.color}
             unit={DASHBOARD_CHARTS_CONFIG.sales.unit}
             height={DASHBOARD_CHARTS_CONFIG.sales.height}
@@ -231,7 +211,7 @@ export default function DashboardPage() {
         <Card>
           <h3 className="text-sm font-semibold text-foreground mb-4">{t.dashboard.profitChartTitle}</h3>
           <BarChart
-            data={weekAgg.profitChart}
+            data={profitChart}
             color={DASHBOARD_CHARTS_CONFIG.profit.color}
             unit={DASHBOARD_CHARTS_CONFIG.profit.unit}
             height={DASHBOARD_CHARTS_CONFIG.profit.height}
@@ -303,31 +283,35 @@ export default function DashboardPage() {
               {t.dashboard.viewAllActivity}
             </a>
           </div>
-          <div className="space-y-1.5">
-            {activities.map((a) => (
-              <div
-                key={a.id}
-                className="flex items-center gap-3 py-2.5 px-3 rounded-lg hover:bg-zinc-50 transition-colors"
-              >
+          {activities.length === 0 ? (
+            <p className="text-sm text-muted py-4 text-center">{t.kasirDashboard.noActivity}</p>
+          ) : (
+            <div className="space-y-1.5">
+              {activities.map((a) => (
                 <div
-                  className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
-                    a.user_name === user?.name && user?.role === "Owner"
-                      ? "bg-primary text-white"
-                      : "bg-zinc-500/10 text-zinc-600"
-                  }`}
+                  key={a.id}
+                  className="flex items-center gap-3 py-2.5 px-3 rounded-lg hover:bg-zinc-50 transition-colors"
                 >
-                  {a.user_name.charAt(0).toUpperCase()}
+                  <div
+                    className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
+                      a.user_name === user?.name && user?.role === "Owner"
+                        ? "bg-primary text-white"
+                        : "bg-zinc-500/10 text-zinc-600"
+                    }`}
+                  >
+                    {a.user_name.charAt(0).toUpperCase()}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-foreground">
+                      <span className="font-medium">{a.user_name}</span>{" "}
+                      {a.action_label}
+                    </p>
+                    <p className="text-xs text-muted">{a.description}</p>
+                  </div>
                 </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm text-foreground">
-                    <span className="font-medium">{a.user_name}</span>{" "}
-                    {activityLabelAction(db, a.action)}
-                  </p>
-                  <p className="text-xs text-muted">{a.description}</p>
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </Card>
       </div>
     </DashboardLayout>

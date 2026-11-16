@@ -6,7 +6,6 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { useLang } from "@/lib/i18n/LanguageContext";
-import { useAuth } from "@/lib/auth";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -34,7 +33,6 @@ const emptyForm: FormState = { name: "", phone: "", address: "" };
 
 export default function SupplierPage() {
   const { t } = useLang();
-  const { user } = useAuth();
 
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [loading, setLoading] = useState(true);
@@ -97,7 +95,7 @@ export default function SupplierPage() {
       }
       const json = await res.json();
       setSuppliers(json.data?.suppliers || []);
-    } catch (err) {
+    } catch {
       setError(t.supplier.errorLoadFailed || "Gagal memuat data supplier");
     } finally {
       setLoading(false);
@@ -177,14 +175,14 @@ export default function SupplierPage() {
 
       setModalOpen(false);
       await fetchSuppliers();
-    } catch (err) {
+    } catch {
       setFieldErrors({ name: "Koneksi ke server terganggu" });
     } finally {
       setSubmitting(false);
     }
   };
 
-  const removeSupplierGuarded = async (id: string, supName: string) => {
+  const removeSupplierGuarded = async (id: string) => {
     const sup = suppliers.find((s) => s.id === id);
     if (sup && sup.purchase_count > 0) {
       setBlockMsg(
@@ -218,7 +216,7 @@ export default function SupplierPage() {
       }
 
       await fetchSuppliers();
-    } catch (err) {
+    } catch {
       setBlockMsg("Koneksi ke server terganggu");
     }
   };
@@ -349,7 +347,7 @@ export default function SupplierPage() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => removeSupplierGuarded(s.id, s.name)}
+                        onClick={() => removeSupplierGuarded(s.id)}
                         className={actionBtn}
                         title={t.common.delete}
                         aria-label={t.common.delete}

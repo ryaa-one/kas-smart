@@ -10,24 +10,32 @@ import { Input } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
 import { ReceiptModal } from "@/components/ui/ReceiptModal";
 import { BarcodeScanner } from "@/components/ui/BarcodeScanner";
-import {
-  useDb,
-  getDb,
-  addCustomer,
-  createDraftSale,
-  updateDraftContents,
-  cancelSale,
-  finalizeSale,
-  getSale,
-  setSaleMethod,
-  logActivity,
-  type Customer,
-  type Product,
-  type Sale,
-} from "@/lib/mock/db";
+import { useStoreSettings } from "@/lib/use-store-settings";
+import type { SerializedSale } from "@/lib/sales-api";
 
 type Stage = "cart" | "payment" | "success" | "cancelled";
 type PaymentMethod = "cash" | "qris" | "debt";
+
+export interface Product {
+  id: string;
+  name: string;
+  category_id: string;
+  category?: string;
+  category_name?: string | null;
+  barcode: string | null;
+  purchase_price: number;
+  selling_price: number;
+  stock: number;
+  minimum_stock: number;
+  is_active: boolean;
+}
+
+export interface Customer {
+  id: string;
+  name: string;
+  phone: string;
+  address: string;
+}
 
 interface CartItem {
   product: Product;
@@ -60,8 +68,10 @@ function QrisPlaceholder() {
 export default function KasirPage() {
   const { t } = useLang();
   const { user } = useAuth();
-  const db = useDb(); // katalog produk + pelanggan + settings dari store bersama
+  const storeSettings = useStoreSettings(); // STORE_SETTINGS backend (QRIS statis)
 
+  const [products, setProducts] = useState<Product[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
   const [query, setQuery] = useState("");
   const [cart, setCart] = useState<CartItem[]>([]);
   const [stage, setStage] = useState<Stage>("cart");
@@ -69,11 +79,10 @@ export default function KasirPage() {
   const [customerId, setCustomerId] = useState("");
   const [cashReceived, setCashReceived] = useState("");
   const [customerError, setCustomerError] = useState(false);
-  const [saleId, setSaleId] = useState(""); // Draft SALES_TRANSACTIONS
-  const [finalSale, setFinalSale] = useState<Sale | null>(null);
+  const [saleId, setSaleId] = useState("");
+  const [finalSale, setFinalSale] = useState<SerializedSale | null>(null);
   const [receiptOpen, setReceiptOpen] = useState(false); // M-4: modal struk khusus
   const [stockError, setStockError] = useState(false);
-  const [customers, setCustomers] = useState<Customer[]>(() => db.customers);
   const [customerQuery, setCustomerQuery] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [newName, setNewName] = useState("");
@@ -83,9 +92,37 @@ export default function KasirPage() {
   const [justAdded, setJustAdded] = useState(false);
   const [scanOpen, setScanOpen] = useState(false);
   const [scanFeedback, setScanFeedback] = useState<{ kind: "success" | "error"; text: string } | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
-  // Sinkron daftar pelanggan dari store (tambahan baru muncul di pencarian).
-  useEffect(() => setCustomers(db.customers), [db.customers]);
+  // Ambil data produk & pelanggan dari Supabase PostgreSQL via API
+  const fetchProducts = async () => {
+    try {
+      const res = await fetch("/api/products");
+      const json = await res.json();
+      if (res.ok && json.ok && Array.isArray(json.data?.products)) {
+        setProducts(json.data.products);
+      }
+    } catch (e) {
+      console.error("Gagal mengambil data produk:", e);
+    }
+  };
+
+  const fetchCustomers = async () => {
+    try {
+      const res = await fetch("/api/customers");
+      const json = await res.json();
+      if (res.ok && json.ok && Array.isArray(json.data?.customers)) {
+        setCustomers(json.data.customers);
+      }
+    } catch (e) {
+      console.error("Gagal mengambil data pelanggan:", e);
+    }
+  };
+
+  useEffect(() => {
+    fetchProducts();
+    fetchCustomers();
+  }, []);
 
   // Auto-hide feedback hasil scan (produk masuk / tidak ditemukan).
   useEffect(() => {
@@ -115,27 +152,47 @@ export default function KasirPage() {
     setAddOpen(true);
   };
 
-  const submitAddCustomer = () => {
+  const submitAddCustomer = async () => {
     if (!newName.trim()) {
       setNewError(t.kasir.errorCustomerNameRequired);
       return;
     }
-    const created = addCustomer(newName.trim(), newPhone.trim(), newAddress.trim());
-    if (actor.current)
-      logActivity(actor.current, "customerAdd", `Tambah pelanggan ${created.name}`);
-    setCustomers(getDb().customers);
-    setCustomerId(created.id);
-    setAddOpen(false);
-    setJustAdded(true);
+    try {
+      const res = await fetch("/api/customers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: newName.trim(),
+          phone: newPhone.trim(),
+          address: newAddress.trim(),
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) {
+        setNewError(json.error || "Gagal menambah pelanggan");
+        return;
+      }
+      const created: Customer = json.data.customer;
+      setCustomers((prev) => [...prev, created]);
+      setCustomerId(created.id);
+      setAddOpen(false);
+      setJustAdded(true);
+    } catch (e) {
+      console.error("Gagal menambah pelanggan:", e);
+      setNewError("Terjadi kesalahan jaringan.");
+    }
   };
 
-  // Katalog = produk AKTIF dari store — sama dengan halaman Produk (H-2).
+  // Katalog = produk AKTIF dari database
   const catalog = useMemo(
     () =>
-      db.products
+      products
         .filter((p) => p.is_active)
-        .map((p) => ({ ...p, category: db.categories.find((c) => c.id === p.category_id)?.name ?? "-" })),
-    [db.products, db.categories]
+        .map((p) => ({
+          ...p,
+          category: p.category_name ?? p.category ?? "-",
+        })),
+    [products]
   );
 
   const results = useMemo(() => {
@@ -199,21 +256,9 @@ export default function KasirPage() {
     setScanFeedback({ kind: "success", text: t.kasir.scanAdded.replace("{code}", product.name) });
   };
 
-  // Lanjut ke pembayaran → buat/refresh Draft SALES_TRANSACTIONS (Activity c).
+  // Lanjut ke pembayaran
   const proceedToPayment = () => {
-    if (!actor.current || cart.length === 0) return;
-    const items = cart.map((i) => ({
-      product: getDb().products.find((p) => p.id === i.product.id) ?? i.product,
-      quantity: i.quantity,
-    }));
-    let id = saleId;
-    const existing = id ? getSale(id) : undefined;
-    if (existing && existing.status === "draft") {
-      updateDraftContents(id, items);
-    } else {
-      id = createDraftSale(actor.current, items).id;
-    }
-    setSaleId(id);
+    if (cart.length === 0) return;
     setStage("payment");
     setMethod(null);
     setCustomerId("");
@@ -224,46 +269,69 @@ export default function KasirPage() {
     setStockError(false);
   };
 
-  const finishStage = (sale: Sale, s: Stage) => {
+  const finishStage = (sale: SerializedSale, s: Stage) => {
     setFinalSale(sale);
     setStage(s);
     setSaleId("");
   };
 
-  const confirmTransaction = () => {
+  const confirmTransaction = async () => {
     if (method === "debt" && !customerId) {
       setCustomerError(true);
       return;
     }
-    if (!saleId || !method) return;
-    const res = finalizeSale(saleId, {
-      method,
-      customerId: method === "debt" ? customerId : null,
-      amountPaid: method === "cash" ? cashNum : null,
-    });
-    if (!res.ok) {
-      setStockError(true);
-      setStage("cart");
-      return;
+    if (!method || cart.length === 0 || submitting) return;
+
+    setSubmitting(true);
+    setStockError(false);
+    setCustomerError(false);
+
+    try {
+      const res = await fetch("/api/sales", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          items: cart.map((i) => ({
+            product_id: i.product.id,
+            quantity: i.quantity,
+          })),
+          payment_method: method,
+          customer_id: method === "debt" ? customerId : (customerId || null),
+          amount_paid: method === "cash" ? cashNum : null,
+        }),
+      });
+
+      const json = await res.json();
+      if (!res.ok || !json.ok) {
+        if (res.status === 409 || json.error === "stock_insufficient" || json.error === "stock") {
+          setStockError(true);
+          setStage("cart");
+        } else {
+          alert(json.error || "Gagal memproses transaksi");
+        }
+        setSubmitting(false);
+        return;
+      }
+
+      const sale: SerializedSale = json.data.sale;
+      await fetchProducts();
+      finishStage(sale, "success");
+    } catch (e) {
+      console.error("Transaction error:", e);
+      alert("Terjadi kesalahan jaringan.");
+    } finally {
+      setSubmitting(false);
     }
-    finishStage(getSale(saleId)!, "success");
   };
 
   // Pembatalan QRIS menunggu → status cancelled, stok tidak berkurang (UC-12).
   const cancelQris = () => {
-    if (!saleId) return;
     if (!window.confirm(t.kasir.cancelConfirm)) return;
-    const sale = getSale(saleId);
-    if (!sale || (sale.status !== "waiting_payment" && sale.status !== "draft")) return;
-    cancelSale(saleId);
-    setFinalSale(getSale(saleId)!);
     setStage("cancelled");
     setSaleId("");
   };
 
   const resetAll = () => {
-    // Draft yang ditinggalkan dibatalkan supaya tidak menumpuk sebagai draft.
-    if (saleId && getSale(saleId)?.status === "draft") cancelSale(saleId);
     setCart([]);
     setStage("cart");
     setMethod(null);
@@ -284,8 +352,6 @@ export default function KasirPage() {
           setMethod(m);
           setCustomerError(false);
           setStockError(false);
-          // QRIS: transaksi Draft langsung berstatus Menunggu Pembayaran (UC-12).
-          if (m === "qris" && saleId) setSaleMethod(saleId, "qris");
         }}
         className={`flex flex-col items-center gap-2 p-4 rounded-xl border-2 transition-colors ${
           active
@@ -300,7 +366,7 @@ export default function KasirPage() {
   };
 
   const iconClass = "w-[22px] h-[22px] text-current";
-  const qrisImage = db.settings.qris_image;
+  const qrisImage = storeSettings.qris_image;
 
   return (
     <DashboardLayout title={t.kasir.title} subtitle={t.kasir.subtitle}>
@@ -593,16 +659,16 @@ export default function KasirPage() {
             )}
 
             <div className="flex gap-2 mt-6">
-              <Button variant="secondary" onClick={() => setStage("cart")}>
+              <Button variant="secondary" onClick={() => setStage("cart")} disabled={submitting}>
                 {t.kasir.backToCart}
               </Button>
               <Button
                 className="flex-1"
                 size="lg"
-                disabled={!method || cashInsufficient}
+                disabled={!method || cashInsufficient || submitting}
                 onClick={confirmTransaction}
               >
-                {t.kasir.confirmLunas}
+                {submitting ? "Memproses..." : t.kasir.confirmLunas}
               </Button>
             </div>
           </Card>
@@ -639,7 +705,7 @@ export default function KasirPage() {
           </div>
           <h3 className="text-lg font-bold text-foreground mt-4">{t.kasir.successTitle}</h3>
           <p className="text-sm text-muted mt-1">{t.kasir.successSubtitle}</p>
-          {finalSale.status === "debt" && (
+          {(finalSale.status === "debt" || finalSale.status === "HUTANG") && (
             <p className="text-xs text-warning mt-1">{t.kasir.debtRecordNote}</p>
           )}
 
@@ -652,7 +718,7 @@ export default function KasirPage() {
               <span className="text-muted">{t.kasir.total}</span>
               <span className="font-bold text-primary">{fmt(finalSale.total)}</span>
             </div>
-            {finalSale.status === "paid" && finalSale.payment_method === "cash" && (
+            {(finalSale.status === "paid" || finalSale.status === "LUNAS") && finalSale.payment_method === "cash" && (
               <>
                 <div className="flex justify-between text-sm">
                   <span className="text-muted">{t.kasir.cashAmount}</span>
@@ -664,7 +730,7 @@ export default function KasirPage() {
                 </div>
               </>
             )}
-            {finalSale.status === "debt" && finalSale.customer_name && (
+            {(finalSale.status === "debt" || finalSale.status === "HUTANG") && finalSale.customer_name && (
               <div className="flex justify-between text-sm">
                 <span className="text-muted">{t.kasir.customer}</span>
                 <span className="font-medium">{finalSale.customer_name}</span>

@@ -4,7 +4,7 @@
 // GET/POST /api/purchases | GET/PATCH/DELETE /api/purchases/:id
 // Stok management: CREATE → stok bertambah, EDIT → adjust stok, DELETE → kembalikan stok.
 // Owner: full CRUD. Kasir: read-only (tombol Tambah/Edit/Hapus hidden).
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useLang } from "@/lib/i18n/LanguageContext";
 import { useAuth } from "@/lib/auth";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
@@ -253,7 +253,7 @@ export default function PembelianPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  const loadPurchases = async () => {
+  const loadPurchases = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
@@ -276,11 +276,11 @@ export default function PembelianPage() {
       setError("Koneksi ke server terganggu");
       setLoading(false);
     }
-  };
+  }, [t.common.errorUnauthorized, t.pembelian.errorLoadFailed]);
 
   useEffect(() => {
-    loadPurchases();
-  }, []);
+    void loadPurchases();
+  }, [loadPurchases]);
 
   const handleSuccess = () => {
     loadPurchases();
