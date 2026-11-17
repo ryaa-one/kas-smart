@@ -117,12 +117,34 @@ export default function KasirCrudPage() {
     } finally {
       setLoading(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [c.forbidden, c.errorLoad]);
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    let active = true;
+    async function loadInitial() {
+      try {
+        const res = await fetch("/api/kasir", { credentials: "same-origin" });
+        const json = (await res.json().catch(() => null)) as
+          | { data?: { users?: ApiUser[] } }
+          | null;
+        if (!active) return;
+        if (res.ok && json?.data?.users) {
+          setUsers(json.data.users);
+          setLoadError(null);
+        } else {
+          setLoadError(res.status === 403 ? c.forbidden : c.errorLoad);
+        }
+      } catch {
+        if (active) setLoadError(c.errorLoad);
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+    void loadInitial();
+    return () => {
+      active = false;
+    };
+  }, [c.forbidden, c.errorLoad]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -136,24 +158,13 @@ export default function KasirCrudPage() {
     });
   }, [users, query, statusFilter]);
 
-  // Reset ke halaman 1 saat filter atau pencarian berubah
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [query, statusFilter]);
-
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
-
-  // Pastikan halaman tetap valid bila total data berkurang
-  useEffect(() => {
-    if (currentPage > totalPages) {
-      setCurrentPage(totalPages);
-    }
-  }, [currentPage, totalPages]);
+  const safePage = Math.min(currentPage, totalPages);
 
   const paginated = useMemo(() => {
-    const start = (currentPage - 1) * pageSize;
+    const start = (safePage - 1) * pageSize;
     return filtered.slice(start, start + pageSize);
-  }, [filtered, currentPage, pageSize]);
+  }, [filtered, safePage, pageSize]);
 
   const openAdd = () => {
     setEditing(null);
@@ -299,7 +310,10 @@ export default function KasirCrudPage() {
             </svg>
             <input
               value={query}
-              onChange={(ev) => setQuery(ev.target.value)}
+              onChange={(ev) => {
+                setQuery(ev.target.value);
+                setCurrentPage(1);
+              }}
               placeholder={c.searchPlaceholder}
               className="w-full pl-9 pr-3 py-2 rounded-lg border border-line bg-white text-sm text-foreground placeholder:text-muted/60 outline-none transition-colors focus:border-primary focus:ring-2 focus:ring-primary/10"
             />
@@ -307,7 +321,10 @@ export default function KasirCrudPage() {
 
           <select
             value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as "" | "aktif" | "nonaktif")}
+            onChange={(e) => {
+              setStatusFilter(e.target.value as "" | "aktif" | "nonaktif");
+              setCurrentPage(1);
+            }}
             className="px-3 py-2 rounded-lg border border-line bg-white text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/10"
             aria-label={t.common.filterStatus}
           >
@@ -405,7 +422,7 @@ export default function KasirCrudPage() {
               ))}
             </Table>
             <Pagination
-              currentPage={currentPage}
+              currentPage={safePage}
               totalPages={totalPages}
               totalItems={filtered.length}
               pageSize={pageSize}

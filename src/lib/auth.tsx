@@ -8,6 +8,7 @@
 
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -89,6 +90,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  const refreshUser = useCallback(async () => {
+    try {
+      const res = await fetch("/api/auth/me", { credentials: "same-origin" });
+      if (res.status === 200) {
+        const json = (await res.json()) as { data?: { user?: ApiUser } };
+        if (json.data?.user) setUser(toAuthUser(json.data.user));
+      }
+    } catch {
+      // server mati/ offline — abaikan
+    }
+  }, []);
+
   const value = useMemo<AuthContextType>(
     () => ({
       user,
@@ -126,20 +139,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         setUser(null);
       },
-      refreshUser: async () => {
-        try {
-          const res = await fetch("/api/auth/me", { credentials: "same-origin" });
-          if (res.status === 200) {
-            const json = (await res.json()) as { data?: { user?: ApiUser } };
-            if (json.data?.user) setUser(toAuthUser(json.data.user));
-          }
-        } catch {
-          // server mati/ offline — abaikan
-        }
-      },
+      refreshUser,
       hydrated,
     }),
-    [user, hydrated]
+    [user, hydrated, refreshUser]
   );
 
   return (

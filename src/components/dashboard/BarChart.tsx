@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 import {
   ResponsiveContainer,
   BarChart as RechartsBar,
@@ -62,6 +62,8 @@ function CustomTooltip({ active, payload, unit = "jt" }: CustomTooltipProps) {
   return null;
 }
 
+const emptySubscribe = () => () => {};
+
 export function BarChart({
   data,
   color = "bg-primary",
@@ -69,11 +71,11 @@ export function BarChart({
   unit = "jt",
   animationDuration = 800,
 }: BarChartProps) {
-  const [isMounted, setIsMounted] = useState(false);
-
-  useEffect(() => {
-    setIsMounted(true);
-  }, []);
+  const isMounted = useSyncExternalStore(
+    emptySubscribe,
+    () => true,
+    () => false
+  );
 
   const fillColor = resolveColor(color);
 

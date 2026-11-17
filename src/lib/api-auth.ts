@@ -6,8 +6,8 @@
 // HANYA boleh diimpor dari kode server (route handler). Jangan dari client.
 
 import {
-  createHash,
   createHmac,
+  randomBytes,
   timingSafeEqual,
 } from "node:crypto";
 import { cookies } from "next/headers";
@@ -22,14 +22,25 @@ export { hashPassword, verifyPassword };
 export const SESSION_COOKIE = "kassmart_session";
 export const SESSION_MAX_AGE = 60 * 60 * 24 * 7; // 7 hari
 
+const globalForDevAuth = globalThis as unknown as {
+  __kasSmartDevSecret?: string;
+};
+
 function sessionSecret(): string {
-  const fromEnv = process.env.AUTH_SECRET;
+  const fromEnv = process.env.AUTH_SECRET?.trim();
   if (fromEnv && fromEnv.length >= 32) return fromEnv;
-  // ponytail: fallback deterministik untuk dev/sekolah — set AUTH_SECRET
-  // di production sebelum deploy.
-  return createHash("sha256")
-    .update("kassmart-auth-v1:" + (process.env.DATABASE_URL ?? ""))
-    .digest("hex");
+
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "Configuration error: AUTH_SECRET environment variable must be configured and at least 32 characters long in production."
+    );
+  }
+
+  // Fallback ephemeral khusus development lokal agar next dev tetap berjalan tanpa merusak keamanan produksi.
+  if (!globalForDevAuth.__kasSmartDevSecret) {
+    globalForDevAuth.__kasSmartDevSecret = randomBytes(32).toString("hex");
+  }
+  return globalForDevAuth.__kasSmartDevSecret;
 }
 
 export interface SessionPayload {
@@ -87,12 +98,22 @@ export async function requireOwner(): Promise<SessionPayload | ReturnType<typeof
   return session;
 }
 
-export function sessionCookieHeader(token: string): string {
-  return `${SESSION_COOKIE}=${token}; HttpOnly; Path=/; Max-Age=${SESSION_MAX_AGE}; SameSite=Lax`;
+export function isHttpsRequest(request?: Request): boolean {
+  if (process.env.COOKIE_SECURE === "true") return true;
+  if (!request) return false;
+  const forwardedProto = request.headers.get("x-forwarded-proto");
+  if (forwardedProto?.split(",")[0]?.trim().toLowerCase() === "https") {
+    return true;
+  }
+  return request.url.startsWith("https://");
 }
 
-export function clearedSessionCookieHeader(): string {
-  return `${SESSION_COOKIE}=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax`;
+export function sessionCookieHeader(token: string, secure = false): string {
+  return `${SESSION_COOKIE}=${token}; HttpOnly; Path=/; Max-Age=${SESSION_MAX_AGE}; SameSite=Lax${secure ? "; Secure" : ""}`;
+}
+
+export function clearedSessionCookieHeader(secure = false): string {
+  return `${SESSION_COOKIE}=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax${secure ? "; Secure" : ""}`;
 }
 
 // ---------- Response JSON konsisten ----------

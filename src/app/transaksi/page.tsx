@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLang } from "@/lib/i18n/LanguageContext";
 import { useAuth } from "@/lib/auth";
@@ -651,8 +652,14 @@ export default function KasirPage() {
                   {t.kasir.qrisWaitingBadge}
                 </span>
                 {qrisImage ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={qrisImage} alt={t.kasir.qrisPlaceholder} className="w-40 h-40 mx-auto object-contain bg-white border border-line rounded-lg p-2" />
+                  <Image
+                    src={qrisImage}
+                    alt={t.kasir.qrisPlaceholder}
+                    width={160}
+                    height={160}
+                    unoptimized
+                    className="w-40 h-40 mx-auto object-contain bg-white border border-line rounded-lg p-2"
+                  />
                 ) : (
                   <QrisPlaceholder />
                 )}

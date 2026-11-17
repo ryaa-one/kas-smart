@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import {
   fail,
   hashlessUser,
+  isHttpsRequest,
   ok,
   sessionCookieHeader,
   createSessionToken,
@@ -63,5 +64,7 @@ export async function POST(request: Request) {
     role: user.role,
     exp: Math.floor(Date.now() / 1000) + SESSION_MAX_AGE,
   });
-  return ok({ user: hashlessUser(user) }, 200, [sessionCookieHeader(token)]);
+  return ok({ user: hashlessUser(user) }, 200, [
+    sessionCookieHeader(token, isHttpsRequest(request)),
+  ]);
 }

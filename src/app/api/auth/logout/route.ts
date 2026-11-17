@@ -3,10 +3,11 @@ import { prisma } from "@/lib/prisma";
 import {
   clearedSessionCookieHeader,
   getSession,
+  isHttpsRequest,
   ok,
 } from "@/lib/api-auth";
 
-export async function POST() {
+export async function POST(request: Request) {
   const session = await getSession();
   if (session) {
     // user mungkin sudah dihapus/nonaktif — jangan gagalkan logout.
@@ -22,5 +23,7 @@ export async function POST() {
       // FK bisa gagal bila user tak ada — abaikan, sesi tetap dihapus.
     }
   }
-  return ok({ loggedOut: true }, 200, [clearedSessionCookieHeader()]);
+  return ok({ loggedOut: true }, 200, [
+    clearedSessionCookieHeader(isHttpsRequest(request)),
+  ]);
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useLang } from "@/lib/i18n/LanguageContext";
 import { useAuth } from "@/lib/auth";
 import { Logo } from "./Logo";
@@ -41,6 +41,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
   const { t } = useLang();
   const { user, logout } = useAuth();
   const pathname = usePathname();
+  const router = useRouter();
 
   const role = user?.role ?? "Owner";
   const items = navByRole[role];
@@ -49,7 +50,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
   const handleLogout = async () => {
     // UC-02 Logout — hapus cookie sesi via POST /api/auth/logout lalu ke login.
     await logout();
-    window.location.href = "/login";
+    router.replace("/login");
   };
 
   return (

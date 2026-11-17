@@ -18,6 +18,14 @@ type ScannerStatus = "starting" | "scanning" | "error";
  * Membutuhkan konteks aman (HTTPS / localhost) untuk getUserMedia.
  */
 export function BarcodeScanner({ open, onDetected, onClose }: BarcodeScannerProps) {
+  if (!open) return null;
+  return <BarcodeScannerModal onDetected={onDetected} onClose={onClose} />;
+}
+
+function BarcodeScannerModal({
+  onDetected,
+  onClose,
+}: Omit<BarcodeScannerProps, "open">) {
   const { t } = useLang();
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const readerRef = useRef<BrowserMultiFormatReader | null>(null);
@@ -30,6 +38,7 @@ export function BarcodeScanner({ open, onDetected, onClose }: BarcodeScannerProp
   }, [onDetected]);
   const [status, setStatus] = useState<ScannerStatus>("starting");
   const [errorMessage, setErrorMessage] = useState("");
+  const [retryTick, setRetryTick] = useState(0);
 
   const stopScanner = useCallback(() => {
     try {
@@ -41,65 +50,78 @@ export function BarcodeScanner({ open, onDetected, onClose }: BarcodeScannerProp
     readerRef.current = null;
   }, []);
 
-  const errorFor = (err: unknown): string => {
-    if (typeof navigator !== "undefined" && !navigator.mediaDevices?.getUserMedia) {
-      return t.scanner.errorInsecure;
-    }
-    const name = err instanceof Error ? err.name : "";
-    if (name === "NotAllowedError") return t.scanner.errorPermission;
-    if (name === "NotFoundError" || name === "OverconstrainedError") return t.scanner.errorNoCamera;
-    return t.scanner.errorUnknown;
-  };
+  const errorFor = useCallback(
+    (err: unknown): string => {
+      if (typeof navigator !== "undefined" && !navigator.mediaDevices?.getUserMedia) {
+        return t.scanner.errorInsecure;
+      }
+      const name = err instanceof Error ? err.name : "";
+      if (name === "NotAllowedError") return t.scanner.errorPermission;
+      if (name === "NotFoundError" || name === "OverconstrainedError") return t.scanner.errorNoCamera;
+      return t.scanner.errorUnknown;
+    },
+    [
+      t.scanner.errorInsecure,
+      t.scanner.errorPermission,
+      t.scanner.errorNoCamera,
+      t.scanner.errorUnknown,
+    ]
+  );
 
-  const startScanner = useCallback(async () => {
-    stopScanner();
+  // Mulai / hentikan stream saat modal terbuka ATAU komponen unmount.
+  useEffect(() => {
+    let disposed = false;
     cancelledRef.current = false;
     lastRef.current = { text: "", at: 0 };
-    setStatus("starting");
-    setErrorMessage("");
-    try {
-      const { BrowserMultiFormatReader } = await import("@zxing/browser");
-      const reader = new BrowserMultiFormatReader();
-      readerRef.current = reader;
-      const controls = await reader.decodeFromVideoDevice(
-        undefined, // undefined = kamera belakang (facingMode environment) bila tersedia
-        videoRef.current ?? undefined,
-        (result) => {
-          if (cancelledRef.current || !result) return;
-          const text = result.getText();
-          const now = Date.now();
-          if (text === lastRef.current.text && now - lastRef.current.at < 2000) return;
-          lastRef.current = { text, at: now };
-          onDetectedRef.current(text);
-        }
-      );
-      if (cancelledRef.current) {
-        controls.stop();
-        return;
-      }
-      controlsRef.current = controls;
-      setStatus("scanning");
-    } catch (err) {
-      if (cancelledRef.current) return;
-      setStatus("error");
-      setErrorMessage(errorFor(err));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stopScanner]);
 
-  // Mulai / hentikan stream saat modal dibuka-tutup ATAU komponen unmount.
-  useEffect(() => {
-    if (!open) return;
-    startScanner();
+    async function beginScan() {
+      try {
+        const { BrowserMultiFormatReader } = await import("@zxing/browser");
+        if (disposed || cancelledRef.current) return;
+        const reader = new BrowserMultiFormatReader();
+        readerRef.current = reader;
+        const controls = await reader.decodeFromVideoDevice(
+          undefined, // undefined = kamera belakang (facingMode environment) bila tersedia
+          videoRef.current ?? undefined,
+          (result) => {
+            if (cancelledRef.current || !result) return;
+            const text = result.getText();
+            const now = Date.now();
+            if (text === lastRef.current.text && now - lastRef.current.at < 2000) return;
+            lastRef.current = { text, at: now };
+            onDetectedRef.current(text);
+          }
+        );
+        if (disposed || cancelledRef.current) {
+          controls.stop();
+          return;
+        }
+        controlsRef.current = controls;
+        setStatus("scanning");
+      } catch (err) {
+        if (disposed || cancelledRef.current) return;
+        setStatus("error");
+        setErrorMessage(errorFor(err));
+      }
+    }
+
+    void beginScan();
     return () => {
+      disposed = true;
       cancelledRef.current = true;
       stopScanner();
     };
-  }, [open, startScanner, stopScanner]);
+  }, [retryTick, stopScanner, errorFor]);
+
+  const handleRetry = () => {
+    stopScanner();
+    setStatus("starting");
+    setErrorMessage("");
+    setRetryTick((n) => n + 1);
+  };
 
   // Escape menutup scanner saja (capture phase) tanpa ikut menutup modal form di bawahnya.
   useEffect(() => {
-    if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       e.stopPropagation();
@@ -107,9 +129,7 @@ export function BarcodeScanner({ open, onDetected, onClose }: BarcodeScannerProp
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [open, onClose]);
-
-  if (!open) return null;
+  }, [onClose]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -148,7 +168,7 @@ export function BarcodeScanner({ open, onDetected, onClose }: BarcodeScannerProp
           {status === "error" && (
             <div role="alert" className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-6 text-center">
               <p className="text-sm text-white/90">{errorMessage}</p>
-              <Button variant="secondary" size="sm" onClick={startScanner}>
+              <Button variant="secondary" size="sm" onClick={handleRetry}>
                 {t.scanner.retry}
               </Button>
             </div>

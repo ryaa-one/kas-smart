@@ -27,37 +27,27 @@ export default function ProfilSayaPage() {
   const { t } = useLang();
   const { user, refreshUser } = useAuth();
 
-  const [form, setForm] = useState<ProfileForm>({
-    name: user?.name ?? "",
-    phone: user?.phone ?? "",
-    email: user?.email ?? "",
-    currentPassword: "",
-    password: "",
-    confirm: "",
-  });
+  const [draft, setDraft] = useState<Partial<ProfileForm>>({});
   const [errors, setErrors] = useState<Partial<Record<keyof ProfileForm | "general", string>>>({});
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
   // Ambil data terbaru langsung dari database (/api/auth/me) saat halaman dibuka.
   useEffect(() => {
-    refreshUser();
-  }, []);
+    void refreshUser();
+  }, [refreshUser]);
 
-  // Sinkronkan form saat sesi pulih dari /me (refresh halaman).
-  useEffect(() => {
-    if (user) {
-      setForm((f) => ({
-        ...f,
-        name: f.name || user.name,
-        phone: f.phone || user.phone,
-        email: f.email || user.email,
-      }));
-    }
-  }, [user]);
+  const form: ProfileForm = {
+    name: draft.name ?? user?.name ?? "",
+    phone: draft.phone ?? user?.phone ?? "",
+    email: draft.email ?? user?.email ?? "",
+    currentPassword: draft.currentPassword ?? "",
+    password: draft.password ?? "",
+    confirm: draft.confirm ?? "",
+  };
 
   const set = (patch: Partial<ProfileForm>) =>
-    setForm((f) => ({ ...f, ...patch }));
+    setDraft((d) => ({ ...d, ...patch }));
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -112,15 +102,7 @@ export default function ProfilSayaPage() {
         return;
       }
       await refreshUser();
-      setForm((f) => ({
-        ...f,
-        name: json?.data?.user?.name ?? form.name.trim(),
-        phone: json?.data?.user?.phone_number ?? form.phone.trim(),
-        email: json?.data?.user?.email ?? form.email.trim(),
-        currentPassword: "",
-        password: "",
-        confirm: "",
-      }));
+      setDraft({});
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
     } catch {

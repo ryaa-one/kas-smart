@@ -59,24 +59,13 @@ export default function SupplierPage() {
     );
   }, [suppliers, query]);
 
-  // Reset ke halaman 1 saat query pencarian berubah
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [query]);
-
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
-
-  // Pastikan halaman tetap valid bila total data berkurang
-  useEffect(() => {
-    if (currentPage > totalPages) {
-      setCurrentPage(totalPages);
-    }
-  }, [currentPage, totalPages]);
+  const safePage = Math.min(currentPage, totalPages);
 
   const paginated = useMemo(() => {
-    const start = (currentPage - 1) * pageSize;
+    const start = (safePage - 1) * pageSize;
     return filtered.slice(start, start + pageSize);
-  }, [filtered, currentPage, pageSize]);
+  }, [filtered, safePage, pageSize]);
 
   const resetFilters = () => {
     setQuery("");
@@ -103,9 +92,32 @@ export default function SupplierPage() {
   };
 
   useEffect(() => {
-    fetchSuppliers();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    let active = true;
+    async function loadInitial() {
+      try {
+        const res = await fetch("/api/suppliers", { credentials: "same-origin" });
+        if (!res.ok) {
+          if (res.status === 401) throw new Error("unauthorized");
+          throw new Error("fetch_failed");
+        }
+        const json = await res.json();
+        if (active) {
+          setSuppliers(json.data?.suppliers || []);
+          setError("");
+        }
+      } catch {
+        if (active) {
+          setError(t.supplier.errorLoadFailed || "Gagal memuat data supplier");
+        }
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+    void loadInitial();
+    return () => {
+      active = false;
+    };
+  }, [t.supplier.errorLoadFailed]);
 
   const openAdd = () => {
     setEditingId(null);
@@ -234,7 +246,10 @@ export default function SupplierPage() {
             </svg>
             <input
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                setCurrentPage(1);
+              }}
               placeholder={t.supplier.searchPlaceholder || "Cari nama / nomor telepon supplier..."}
               className="flex-1 min-w-0 bg-transparent text-sm outline-none placeholder:text-muted/60"
             />
@@ -372,7 +387,7 @@ export default function SupplierPage() {
               ))}
             </Table>
             <Pagination
-              currentPage={currentPage}
+              currentPage={safePage}
               totalPages={totalPages}
               totalItems={filtered.length}
               pageSize={pageSize}

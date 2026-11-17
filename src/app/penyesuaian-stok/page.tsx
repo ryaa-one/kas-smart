@@ -70,8 +70,40 @@ export default function PenyesuaianStokPage() {
   }, []);
 
   useEffect(() => {
-    loadData();
-  }, [loadData]);
+    let active = true;
+    async function loadInitial() {
+      try {
+        const [adjRes, prodRes] = await Promise.all([
+          fetch("/api/stock-adjustments"),
+          fetch("/api/products"),
+        ]);
+
+        if (!active) return;
+
+        if (adjRes.ok) {
+          const data = await adjRes.json();
+          if (active && data?.data?.adjustments) {
+            setAdjustments(data.data.adjustments);
+          }
+        }
+
+        if (prodRes.ok) {
+          const data = await prodRes.json();
+          if (active && data?.data?.products) {
+            setProducts(data.data.products);
+          }
+        }
+      } catch (err) {
+        console.error("Gagal memuat data penyesuaian stok:", err);
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+    void loadInitial();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const product = products.find((x) => x.id === productId);
   const nChange = parseInt(change, 10);

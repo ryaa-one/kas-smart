@@ -122,26 +122,48 @@ export default function ProdukPage() {
     } finally {
       setLoading(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Kategori dropdown dari DATABASE (read-only; CRUD kategori tahap tersendiri).
-  const refreshCategories = useCallback(async () => {
-    try {
-      const res = await fetch("/api/categories", { credentials: "same-origin" });
-      if (res.ok) {
-        const json = (await res.json()) as { data?: { categories?: ApiCategory[] } };
-        setCategories(json.data?.categories ?? []);
-      }
-    } catch {
-      // dropdown tetap kosong; error utama tampil saat submit
-    }
-  }, []);
+  }, [p.errorLoad]);
 
   useEffect(() => {
-    void refresh();
-    void refreshCategories();
-  }, [refresh, refreshCategories]);
+    let active = true;
+    async function loadInitial() {
+      try {
+        const [prodRes, catRes] = await Promise.all([
+          fetch("/api/products", { credentials: "same-origin" }),
+          fetch("/api/categories", { credentials: "same-origin" }),
+        ]);
+
+        if (!active) return;
+
+        const prodJson = (await prodRes.json().catch(() => null)) as
+          | { data?: { products?: ApiProduct[] } }
+          | null;
+        if (prodRes.ok && prodJson?.data?.products) {
+          setProducts(prodJson.data.products);
+          setLoadError(null);
+        } else {
+          setLoadError(p.errorLoad);
+        }
+
+        if (catRes.ok) {
+          const catJson = (await catRes.json().catch(() => null)) as {
+            data?: { categories?: ApiCategory[] };
+          } | null;
+          if (active) {
+            setCategories(catJson?.data?.categories ?? []);
+          }
+        }
+      } catch {
+        if (active) setLoadError(p.errorLoad);
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+    void loadInitial();
+    return () => {
+      active = false;
+    };
+  }, [p.errorLoad]);
 
   useEffect(() => {
     if (!toast) return;
@@ -169,23 +191,13 @@ export default function ProdukPage() {
     });
   }, [products, query, categoryFilter, statusFilter]);
 
-  // Reset ke halaman 1 saat filter berubah
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [query, categoryFilter, statusFilter]);
-
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
-
-  useEffect(() => {
-    if (currentPage > totalPages) {
-      setCurrentPage(totalPages);
-    }
-  }, [currentPage, totalPages]);
+  const safePage = Math.min(currentPage, totalPages);
 
   const paginated = useMemo(() => {
-    const start = (currentPage - 1) * pageSize;
+    const start = (safePage - 1) * pageSize;
     return filtered.slice(start, start + pageSize);
-  }, [filtered, currentPage, pageSize]);
+  }, [filtered, safePage, pageSize]);
 
   const openAdd = () => {
     setEditing(null);
@@ -359,7 +371,10 @@ export default function ProdukPage() {
             </svg>
             <input
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                setCurrentPage(1);
+              }}
               placeholder={p.searchPlaceholder}
               className="flex-1 min-w-0 bg-transparent text-sm outline-none placeholder:text-muted/60"
             />
@@ -367,7 +382,10 @@ export default function ProdukPage() {
           <div className="flex flex-wrap items-center gap-2">
             <select
               value={categoryFilter}
-              onChange={(e) => setCategoryFilter(e.target.value)}
+              onChange={(e) => {
+                setCategoryFilter(e.target.value);
+                setCurrentPage(1);
+              }}
               aria-label={p.fieldCategory}
               className="px-3 py-2 rounded-lg border border-line bg-white text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/10"
             >
@@ -378,7 +396,10 @@ export default function ProdukPage() {
             </select>
             <select
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as "" | "aktif" | "nonaktif")}
+              onChange={(e) => {
+                setStatusFilter(e.target.value as "" | "aktif" | "nonaktif");
+                setCurrentPage(1);
+              }}
               aria-label={t.common.filterStatus}
               className="px-3 py-2 rounded-lg border border-line bg-white text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/10"
             >
@@ -498,7 +519,7 @@ export default function ProdukPage() {
               ))}
             </Table>
             <Pagination
-              currentPage={currentPage}
+              currentPage={safePage}
               totalPages={totalPages}
               totalItems={filtered.length}
               pageSize={pageSize}

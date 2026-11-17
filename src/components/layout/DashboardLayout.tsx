@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
 import { useAuth } from "@/lib/auth";
@@ -23,10 +23,11 @@ export function DashboardLayout({ children, title, subtitle }: Props) {
   const { user, hydrated } = useAuth();
   const { t } = useLang();
   const pathname = usePathname();
+  const router = useRouter();
 
   useEffect(() => {
-    if (hydrated && !user) window.location.href = "/login";
-  }, [hydrated, user]);
+    if (hydrated && !user) router.replace("/login");
+  }, [hydrated, user, router]);
 
   if (!hydrated || !user) {
     return (

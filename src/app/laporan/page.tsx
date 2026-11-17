@@ -109,8 +109,14 @@ export default function LaporanPage() {
         ))}
       </div>
 
-      {/* ===== 1. Laporan Penjualan ===== */}
-      {tab === "sales" && (
+      {loading ? (
+        <Card>
+          <p className="text-center text-sm text-muted py-10">{t.common.loading}</p>
+        </Card>
+      ) : (
+        <>
+          {/* ===== 1. Laporan Penjualan ===== */}
+          {tab === "sales" && (
         <>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
             <StatCard
@@ -408,6 +414,8 @@ export default function LaporanPage() {
             ))}
           </Table>
         </Card>
+          )}
+        </>
       )}
     </DashboardLayout>
   );
