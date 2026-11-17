@@ -119,14 +119,17 @@ export default function StatistikKasirPage() {
             .reduce((sum, payment) => sum + payment.amount, 0);
         }
 
-        // Saring transaksi: hanya transaksi valid (bukan dibatalkan atau draft)
+        // Saring transaksi: hanya transaksi valid (bukan dibatalkan, draft, atau menunggu pembayaran)
         const validSales = rawSales.filter((s) => {
           const st = s.status.toLowerCase();
           return (
             st !== "dibatalkan" &&
             st !== "cancelled" &&
             st !== "canceled" &&
-            st !== "draft"
+            st !== "draft" &&
+            st !== "menunggu pembayaran" &&
+            st !== "menunggu_pembayaran" &&
+            st !== "waiting_payment"
           );
         });
 

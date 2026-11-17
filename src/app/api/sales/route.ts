@@ -220,13 +220,21 @@ export async function POST(req: NextRequest) {
     try {
       const draftMethod = (payment_method as PaymentMethod) || PaymentMethod.cash;
 
-      // Jika sale_id disediakan, periksa apakah transaksi sudah lunas
+      // Jika sale_id disediakan, periksa kepemilikan & apakah transaksi sudah selesai/dibatalkan
       if (sale_id) {
         const existing = await prisma.salesTransaction.findUnique({
           where: { sale_id },
         });
-        if (existing && (existing.status === SaleStatus.LUNAS || existing.status === SaleStatus.HUTANG)) {
-          return fail(409, "cannot_edit_completed_sale");
+        if (existing) {
+          if (session.role === "Kasir" && existing.user_id !== session.id) {
+            return fail(403, "forbidden");
+          }
+          if (existing.status === SaleStatus.LUNAS || existing.status === SaleStatus.HUTANG) {
+            return fail(409, "cannot_edit_completed_sale");
+          }
+          if (existing.status === SaleStatus.DIBATALKAN) {
+            return fail(409, "sale_already_cancelled");
+          }
         }
       }
 
@@ -339,9 +347,17 @@ export async function POST(req: NextRequest) {
             debtRecord: true,
           },
         });
-        // Jika sudah Lunas, return langsung (idempotent)
-        if (existing && (existing.status === SaleStatus.LUNAS || existing.status === SaleStatus.HUTANG)) {
-          return ok({ sale: serializeSale(existing) }, 200);
+        // Jika sudah Lunas/Hutang, return langsung (idempotent); tolak jika milik kasir lain atau dibatalkan
+        if (existing) {
+          if (session.role === "Kasir" && existing.user_id !== session.id) {
+            return fail(403, "forbidden");
+          }
+          if (existing.status === SaleStatus.LUNAS || existing.status === SaleStatus.HUTANG) {
+            return ok({ sale: serializeSale(existing) }, 200);
+          }
+          if (existing.status === SaleStatus.DIBATALKAN) {
+            return fail(409, "sale_already_cancelled");
+          }
         }
       }
 
@@ -512,8 +528,16 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    if (existingSale && (existingSale.status === SaleStatus.LUNAS || existingSale.status === SaleStatus.HUTANG)) {
-      return ok({ sale: serializeSale(existingSale) }, 200);
+    if (existingSale) {
+      if (session.role === "Kasir" && existingSale.user_id !== session.id) {
+        return fail(403, "forbidden");
+      }
+      if (existingSale.status === SaleStatus.LUNAS || existingSale.status === SaleStatus.HUTANG) {
+        return ok({ sale: serializeSale(existingSale) }, 200);
+      }
+      if (existingSale.status === SaleStatus.DIBATALKAN) {
+        return fail(409, "sale_already_cancelled");
+      }
     }
   }
 
@@ -531,24 +555,32 @@ export async function POST(req: NextRequest) {
 
       // KUNCI IDEMPOTENCY DI DALAM TRANSAKSI DENGAN ROW LOCK:
       if (sale_id) {
-        const locked = await tx.$queryRaw<Array<{ sale_id: string; status: string }>>`
-          SELECT sale_id, status FROM sales_transactions WHERE sale_id = ${sale_id} FOR UPDATE
+        const locked = await tx.$queryRaw<Array<{ sale_id: string; user_id: string; status: string }>>`
+          SELECT sale_id, user_id, status FROM sales_transactions WHERE sale_id = ${sale_id} FOR UPDATE
         `;
-        if (locked.length > 0 && (locked[0].status === "Lunas" || locked[0].status === "Hutang")) {
-          const alreadyDone = await tx.salesTransaction.findUnique({
-            where: { sale_id },
-            include: {
-              user: { select: { id: true, name: true } },
-              customer: { select: { id: true, name: true, phone: true } },
-              details: {
-                include: {
-                  product: { select: { id: true, name: true, barcode: true } },
+        if (locked.length > 0) {
+          if (session.role === "Kasir" && locked[0].user_id !== session.id) {
+            throw new SaleError(403, "forbidden");
+          }
+          if (locked[0].status === "Dibatalkan") {
+            throw new SaleError(409, "sale_already_cancelled");
+          }
+          if (locked[0].status === "Lunas" || locked[0].status === "Hutang") {
+            const alreadyDone = await tx.salesTransaction.findUnique({
+              where: { sale_id },
+              include: {
+                user: { select: { id: true, name: true } },
+                customer: { select: { id: true, name: true, phone: true } },
+                details: {
+                  include: {
+                    product: { select: { id: true, name: true, barcode: true } },
+                  },
                 },
+                debtRecord: true,
               },
-              debtRecord: true,
-            },
-          });
-          return { sale: alreadyDone!, debtRecord: alreadyDone?.debtRecord };
+            });
+            return { sale: alreadyDone!, debtRecord: alreadyDone?.debtRecord };
+          }
         }
       }
 
