@@ -9,7 +9,7 @@ import { StatCard } from "@/components/ui/StatCard";
 import { BarChart } from "@/components/dashboard/BarChart";
 import { DASHBOARD_CHARTS_CONFIG, type DashboardChartPoint } from "@/components/dashboard/chart-config";
 import type { PurchaseData } from "@/lib/purchase-api";
-import type { OwnerDashboardData } from "@/lib/dashboard-api";
+import { formatActivityAction, type OwnerDashboardData } from "@/lib/dashboard-api";
 
 export default function DashboardPage() {
   const { t, lang } = useLang();
@@ -304,7 +304,7 @@ export default function DashboardPage() {
                   <div className="flex-1 min-w-0">
                     <p className="text-sm text-foreground">
                       <span className="font-medium">{a.user_name}</span>{" "}
-                      {a.action_label}
+                      {formatActivityAction(a.action, lang)}
                     </p>
                     <p className="text-xs text-muted">{a.description}</p>
                   </div>

@@ -35,19 +35,31 @@ export async function POST(request: Request) {
   }
   if (!data) return fail(400, "validation_failed");
 
-  const created = await prisma.product
-    .create({
-      data: {
-        name: data.name!,
-        category_id: data.category_id!,
-        barcode: data.barcode ?? null,
-        purchase_price: data.purchase_price!,
-        selling_price: data.selling_price!,
-        stock: data.stock ?? 0,
-        minimum_stock: data.minimum_stock ?? 0,
-        is_active: data.is_active ?? true,
-      },
-      include: PRODUCT_INCLUDE,
+  const created = await prisma
+    .$transaction(async (tx) => {
+      const prod = await tx.product.create({
+        data: {
+          name: data.name!,
+          category_id: data.category_id!,
+          barcode: data.barcode ?? null,
+          purchase_price: data.purchase_price!,
+          selling_price: data.selling_price!,
+          stock: data.stock ?? 0,
+          minimum_stock: data.minimum_stock ?? 0,
+          is_active: data.is_active ?? true,
+        },
+        include: PRODUCT_INCLUDE,
+      });
+
+      await tx.activityLog.create({
+        data: {
+          user_id: guard.id,
+          action: "productAdd",
+          description: `Tambah produk ${prod.name}`,
+        },
+      });
+
+      return prod;
     })
     .catch((e: unknown) => {
       // Balapan barcode (UNIQUE db tetap penjaga terakhir).
@@ -56,12 +68,5 @@ export async function POST(request: Request) {
     });
   if (!created) return fail(409, "barcode_taken");
 
-  await prisma.activityLog.create({
-    data: {
-      user_id: guard.id,
-      action: "productAdd",
-      description: `Tambah produk ${created.name}`,
-    },
-  });
   return ok({ product: serializeProduct(created) }, 201);
 }

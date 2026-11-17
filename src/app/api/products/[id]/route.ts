@@ -61,26 +61,35 @@ export async function PATCH(
   }
   if (Object.keys(data).length === 0) return fail(400, "nothing_to_update");
 
-  const updated = await prisma.product
-    .update({ where: { id }, data, include: PRODUCT_INCLUDE })
+  const toggleOnly =
+    Object.keys(data).length === 1 && data.is_active !== undefined;
+
+  const updated = await prisma
+    .$transaction(async (tx) => {
+      const prod = await tx.product.update({
+        where: { id },
+        data,
+        include: PRODUCT_INCLUDE,
+      });
+
+      await tx.activityLog.create({
+        data: {
+          user_id: guard.id,
+          action: toggleOnly && !data.is_active ? "productDeactivate" : "productEdit",
+          description: toggleOnly
+            ? `${data.is_active ? "Aktifkan kembali" : "Nonaktifkan"} produk ${prod.name}`
+            : `Ubah produk ${prod.name}`,
+        },
+      });
+
+      return prod;
+    })
     .catch((e: unknown) => {
       // Balapan barcode (UNIQUE db penjaga terakhir).
       if ((e as { code?: string })?.code === "P2002") return null;
       throw e;
     });
   if (!updated) return fail(409, "barcode_taken");
-
-  const toggleOnly =
-    Object.keys(data).length === 1 && data.is_active !== undefined;
-  await prisma.activityLog.create({
-    data: {
-      user_id: guard.id,
-      action: toggleOnly && !data.is_active ? "productDeactivate" : "productEdit",
-      description: toggleOnly
-        ? `${data.is_active ? "Aktifkan kembali" : "Nonaktifkan"} produk ${updated.name}`
-        : `Ubah produk ${updated.name}`,
-    },
-  });
   return ok({ product: serializeProduct(updated) });
 }
 
@@ -135,10 +144,20 @@ export async function DELETE(
     });
   }
 
-  // Hard delete dari database
+  // Hard delete dari database + catat activity log secara atomik
   try {
-    await prisma.product.delete({
-      where: { id },
+    await prisma.$transaction(async (tx) => {
+      await tx.product.delete({
+        where: { id },
+      });
+
+      await tx.activityLog.create({
+        data: {
+          user_id: guard.id,
+          action: "productDelete",
+          description: `Hapus produk ${product.name}`,
+        },
+      });
     });
   } catch (e: unknown) {
     if ((e as { code?: string })?.code === "P2003") {
@@ -148,15 +167,6 @@ export async function DELETE(
     }
     throw e;
   }
-
-  // Catat activity log setelah hard delete berhasil
-  await prisma.activityLog.create({
-    data: {
-      user_id: guard.id,
-      action: "productDelete",
-      description: `Hapus produk ${product.name}`,
-    },
-  });
 
   return ok({ deleted: true, id: product.id });
 }

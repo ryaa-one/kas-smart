@@ -32,9 +32,27 @@ export async function POST(request: Request) {
   if (!user) return fail(401, "invalid");
 
   const valid = await verifyPassword(password, user.password);
-  if (!valid) return fail(401, "invalid");
+  if (!valid) {
+    await prisma.activityLog.create({
+      data: {
+        user_id: user.id,
+        action: "loginFailed",
+        description: "Percobaan login gagal (password salah)",
+      },
+    });
+    return fail(401, "invalid");
+  }
 
-  if (user.status !== "aktif") return fail(403, "inactive");
+  if (user.status !== "aktif") {
+    await prisma.activityLog.create({
+      data: {
+        user_id: user.id,
+        action: "loginFailed",
+        description: "Percobaan login gagal (akun nonaktif)",
+      },
+    });
+    return fail(403, "inactive");
+  }
 
   await prisma.activityLog.create({
     data: { user_id: user.id, action: "login", description: "Login ke sistem" },

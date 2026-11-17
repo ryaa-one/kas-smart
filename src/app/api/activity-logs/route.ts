@@ -4,6 +4,8 @@ import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@/generated/prisma/client";
 import { formatActivityAction } from "@/lib/dashboard-api";
 
+const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+
 // GET /api/activity-logs — Daftar log aktivitas sistem
 // Owner: seluruh aktivitas toko (UC-23)
 // Kasir: hanya aktivitas miliknya sendiri (isolasi role)
@@ -25,15 +27,16 @@ export async function GET(req: NextRequest) {
   // 1. ISOLASI AKSES: Kasir HANYA boleh membaca aktivitas miliknya sendiri!
   if (session.role === "Kasir") {
     andConditions.push({ user_id: session.id });
-  } else if (session.role === "Owner" && userParam) {
+  } else if (session.role === "Owner" && userParam && userParam.trim()) {
+    const cleanUser = userParam.trim().slice(0, 100);
     andConditions.push({
-      OR: [{ user_id: userParam }, { user: { name: userParam } }],
+      OR: [{ user_id: cleanUser }, { user: { name: cleanUser } }],
     });
   }
 
   // 2. Filter Pencarian (deskripsi atau nama pengguna)
   if (search && search.trim()) {
-    const s = search.trim();
+    const s = search.trim().slice(0, 100);
     andConditions.push({
       OR: [
         { description: { contains: s, mode: "insensitive" } },
@@ -44,21 +47,26 @@ export async function GET(req: NextRequest) {
 
   // 3. Filter Jenis Aktivitas (action)
   if (actionParam && actionParam.trim()) {
-    andConditions.push({ action: actionParam.trim() });
+    andConditions.push({ action: actionParam.trim().slice(0, 64) });
   }
 
   // 4. Filter Rentang Tanggal (server-side, satu hari penuh)
   if (from || to) {
     const dateRange: { gte?: Date; lte?: Date } = {};
     if (from) {
+      if (!DATE_REGEX.test(from)) return fail(400, "invalid_from_date");
       const d = new Date(`${from}T00:00:00.000Z`);
       if (isNaN(d.getTime())) return fail(400, "invalid_from_date");
       dateRange.gte = d;
     }
     if (to) {
+      if (!DATE_REGEX.test(to)) return fail(400, "invalid_to_date");
       const d = new Date(`${to}T23:59:59.999Z`);
       if (isNaN(d.getTime())) return fail(400, "invalid_to_date");
       dateRange.lte = d;
+    }
+    if (dateRange.gte && dateRange.lte && dateRange.gte > dateRange.lte) {
+      return fail(400, "invalid_date_range");
     }
     andConditions.push({ created_at: dateRange });
   }

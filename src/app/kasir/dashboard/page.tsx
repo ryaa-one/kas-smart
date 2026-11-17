@@ -6,13 +6,13 @@ import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Card } from "@/components/ui/Card";
 import { StatCard } from "@/components/ui/StatCard";
 import { formatRupiah, formatDateTime } from "@/lib/format";
-import type { KasirDashboardData } from "@/lib/dashboard-api";
+import { formatActivityAction, type KasirDashboardData } from "@/lib/dashboard-api";
 
 // Dashboard Kasir (PRD FR-02): Penjualan Hari Ini, Jumlah Transaksi Hari Ini,
 // Shortcut Mulai Transaksi, Aktivitas Hari Ini.
 // Terintegrasi penuh dengan backend database (GET /api/dashboard).
 export default function KasirDashboardPage() {
-  const { t } = useLang();
+  const { t, lang } = useLang();
 
   const [dashboard, setDashboard] = useState<KasirDashboardData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -110,7 +110,7 @@ export default function KasirDashboardPage() {
               >
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-foreground">
-                    {a.action_label}
+                    {formatActivityAction(a.action, lang)}
                   </p>
                   <p className="text-xs text-muted truncate">{a.description}</p>
                 </div>

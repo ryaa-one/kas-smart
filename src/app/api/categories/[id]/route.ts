@@ -76,19 +76,22 @@ export async function PATCH(
     return ok({ category: { id: existing.id, name: existing.name } });
   }
 
-  const updated = await prisma.category.update({
-    where: { id },
-    data,
-    include: { _count: { select: { products: true } } },
-  });
+  const updated = await prisma.$transaction(async (tx) => {
+    const saved = await tx.category.update({
+      where: { id },
+      data,
+      include: { _count: { select: { products: true } } },
+    });
 
-  // Log activity
-  await prisma.activityLog.create({
-    data: {
-      user_id: guard.id,
-      action: "categoryUpdate",
-      description: `Ubah kategori ${updated.name}`,
-    },
+    await tx.activityLog.create({
+      data: {
+        user_id: guard.id,
+        action: "categoryUpdate",
+        description: `Ubah kategori ${saved.name}`,
+      },
+    });
+
+    return saved;
   });
 
   return ok({
@@ -129,16 +132,17 @@ export async function DELETE(
     return fail(409, "category_in_use", { product_count: category._count.products });
   }
 
-  // Aman dihapus
-  await prisma.category.delete({ where: { id } });
+  // Aman dihapus + catat log atomik
+  await prisma.$transaction(async (tx) => {
+    await tx.category.delete({ where: { id } });
 
-  // Log activity
-  await prisma.activityLog.create({
-    data: {
-      user_id: guard.id,
-      action: "categoryDelete",
-      description: `Hapus kategori ${category.name}`,
-    },
+    await tx.activityLog.create({
+      data: {
+        user_id: guard.id,
+        action: "categoryDelete",
+        description: `Hapus kategori ${category.name}`,
+      },
+    });
   });
 
   return ok({ deleted: true });

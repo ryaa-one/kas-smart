@@ -67,17 +67,30 @@ export async function POST(request: Request) {
     if (dupeEmail) return fail(409, "email_taken");
   }
 
-  const created = await prisma.user
-    .create({
-      data: {
-        name,
-        username,
-        phone_number,
-        email: email || null, // K3: kosong = NULL
-        password: await hashPassword(password),
-        role: UserRole.Kasir, // endpoint ini khusus akun Kasir (UC-21)
-        status,
-      },
+  const hashedPassword = await hashPassword(password);
+  const created = await prisma
+    .$transaction(async (tx) => {
+      const user = await tx.user.create({
+        data: {
+          name,
+          username,
+          phone_number,
+          email: email || null, // K3: kosong = NULL
+          password: hashedPassword,
+          role: UserRole.Kasir, // endpoint ini khusus akun Kasir (UC-21)
+          status,
+        },
+      });
+
+      await tx.activityLog.create({
+        data: {
+          user_id: guard.id,
+          action: "cashierAdd",
+          description: `Tambah akun kasir ${name}`,
+        },
+      });
+
+      return user;
     })
     .catch((e: unknown) => {
       // Balapan antar-request: P2002 tetap mungkin terjadi walau sudah dicek.
@@ -86,12 +99,5 @@ export async function POST(request: Request) {
     });
   if (!created) return fail(409, "username_or_email_taken");
 
-  await prisma.activityLog.create({
-    data: {
-      user_id: guard.id,
-      action: "cashierAdd",
-      description: `Tambah akun kasir ${name}`,
-    },
-  });
   return ok({ user: hashlessUser(created) }, 201);
 }

@@ -47,21 +47,24 @@ export async function POST(request: Request) {
     return fail(400, firstError!);
   }
 
-  const supplier = await prisma.supplier.create({
-    data: {
-      name: data.name!,
-      phone: data.phone || "",
-      address: data.address || "",
-    },
-  });
+  const supplier = await prisma.$transaction(async (tx) => {
+    const created = await tx.supplier.create({
+      data: {
+        name: data.name!,
+        phone: data.phone || "",
+        address: data.address || "",
+      },
+    });
 
-  // Log activity
-  await prisma.activityLog.create({
-    data: {
-      user_id: guard.id,
-      action: "supplierCreate",
-      description: `Tambah supplier ${supplier.name}`,
-    },
+    await tx.activityLog.create({
+      data: {
+        user_id: guard.id,
+        action: "supplierCreate",
+        description: `Tambah supplier ${created.name}`,
+      },
+    });
+
+    return created;
   });
 
   return ok({ supplier }, 201);

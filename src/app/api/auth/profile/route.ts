@@ -73,22 +73,26 @@ export async function PATCH(request: Request) {
     if (dupe) return fail(409, "email_taken");
   }
 
-  const updated = await prisma.user
-    .update({ where: { id: current.id }, data })
+  const updated = await prisma
+    .$transaction(async (tx) => {
+      const saved = await tx.user.update({ where: { id: current.id }, data });
+
+      await tx.activityLog.create({
+        data: {
+          user_id: current.id,
+          action: "profileChange",
+          description: "Perbarui profil saya",
+        },
+      });
+
+      return saved;
+    })
     .catch((e: unknown) => {
       // Balapan email (P2002): kembalikan null, ditangani di bawah.
       if ((e as { code?: string })?.code === "P2002") return null;
       throw e;
     });
   if (!updated) return fail(409, "email_taken");
-
-  await prisma.activityLog.create({
-    data: {
-      user_id: current.id,
-      action: "profileChange",
-      description: "Perbarui profil saya",
-    },
-  });
 
   return ok({ user: hashlessUser(updated) });
 }

@@ -14,7 +14,6 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { logActivity } from "@/lib/mock/db";
 
 export type Role = "Owner" | "Kasir";
 
@@ -107,14 +106,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (res.status === 200 && json?.data?.user) {
             const authUser = toAuthUser(json.data.user);
             setUser(authUser);
-            // Log aktivitas mock store lama dipertahankan supaya dashboard
-            // "aktivitas terbaru" tetap berisi selama halaman lain belum
-            // dimigrasi (API sudah menulis ACTIVITY_LOGS DB tersendiri).
-            logActivity(
-              { id: authUser.id, name: authUser.name },
-              "login",
-              "Login ke sistem"
-            );
             return { ok: true, user: authUser };
           }
           if (res.status === 403) return { ok: false, reason: "inactive" };

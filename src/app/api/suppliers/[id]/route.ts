@@ -85,19 +85,22 @@ export async function PATCH(
     });
   }
 
-  const updated = await prisma.supplier.update({
-    where: { id },
-    data,
-    include: { _count: { select: { purchases: true } } },
-  });
+  const updated = await prisma.$transaction(async (tx) => {
+    const saved = await tx.supplier.update({
+      where: { id },
+      data,
+      include: { _count: { select: { purchases: true } } },
+    });
 
-  // Log activity
-  await prisma.activityLog.create({
-    data: {
-      user_id: guard.id,
-      action: "supplierUpdate",
-      description: `Ubah supplier ${updated.name}`,
-    },
+    await tx.activityLog.create({
+      data: {
+        user_id: guard.id,
+        action: "supplierUpdate",
+        description: `Ubah supplier ${saved.name}`,
+      },
+    });
+
+    return saved;
   });
 
   return ok({
@@ -140,16 +143,17 @@ export async function DELETE(
     return fail(409, "supplier_in_use", { purchase_count: supplier._count.purchases });
   }
 
-  // Aman dihapus
-  await prisma.supplier.delete({ where: { id } });
+  // Aman dihapus + catat log atomik
+  await prisma.$transaction(async (tx) => {
+    await tx.supplier.delete({ where: { id } });
 
-  // Log activity
-  await prisma.activityLog.create({
-    data: {
-      user_id: guard.id,
-      action: "supplierDelete",
-      description: `Hapus supplier ${supplier.name}`,
-    },
+    await tx.activityLog.create({
+      data: {
+        user_id: guard.id,
+        action: "supplierDelete",
+        description: `Hapus supplier ${supplier.name}`,
+      },
+    });
   });
 
   return ok({ deleted: true });

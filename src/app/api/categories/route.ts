@@ -45,17 +45,20 @@ export async function POST(request: Request) {
     return fail(400, firstError!);
   }
 
-  const category = await prisma.category.create({
-    data: { name: data.name! },
-  });
+  const category = await prisma.$transaction(async (tx) => {
+    const created = await tx.category.create({
+      data: { name: data.name! },
+    });
 
-  // Log activity
-  await prisma.activityLog.create({
-    data: {
-      user_id: guard.id,
-      action: "categoryCreate",
-      description: `Tambah kategori ${category.name}`,
-    },
+    await tx.activityLog.create({
+      data: {
+        user_id: guard.id,
+        action: "categoryCreate",
+        description: `Tambah kategori ${created.name}`,
+      },
+    });
+
+    return created;
   });
 
   return ok({ category }, 201);

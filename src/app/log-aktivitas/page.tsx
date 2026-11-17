@@ -11,11 +11,12 @@ import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import {
   type SerializedActivityLog,
+  formatActivityAction,
   getActivityActionColor,
 } from "@/lib/activity-log-api";
 
 export default function LogAktivitasPage() {
-  const { t } = useLang();
+  const { t, lang } = useLang();
 
   const [logs, setLogs] = useState<SerializedActivityLog[]>([]);
   const [loading, setLoading] = useState(true);
@@ -186,7 +187,7 @@ export default function LogAktivitasPage() {
               <option value="">{t.logAktivitas.filterAllActions}</option>
               {actionsList.map((a) => (
                 <option key={a.action} value={a.action}>
-                  {a.label}
+                  {formatActivityAction(a.action, lang)}
                 </option>
               ))}
             </select>
@@ -236,7 +237,7 @@ export default function LogAktivitasPage() {
                       l.action
                     )}`}
                   >
-                    {l.action_label}
+                    {formatActivityAction(l.action, lang)}
                   </span>
                 </Td>
                 <Td className="text-muted">{l.description}</Td>
@@ -300,7 +301,7 @@ export default function LogAktivitasPage() {
                     detail.action
                   )}`}
                 >
-                  {detail.action_label}
+                  {formatActivityAction(detail.action, lang)}
                 </span>
               </div>
             </div>

@@ -85,19 +85,24 @@ export async function PATCH(
     if (dupe) return fail(409, "email_taken");
   }
 
-  const updated = await prisma.user.update({ where: { id }, data: patch });
-
   const action = patch.status
     ? patch.status === "nonaktif"
       ? "cashierDeactivate"
       : "cashierActivate"
     : "cashierEdit";
-  await prisma.activityLog.create({
-    data: {
-      user_id: guard.id,
-      action,
-      description: `Ubah akun kasir ${updated.name}`,
-    },
+
+  const updated = await prisma.$transaction(async (tx) => {
+    const saved = await tx.user.update({ where: { id }, data: patch });
+
+    await tx.activityLog.create({
+      data: {
+        user_id: guard.id,
+        action,
+        description: `Ubah akun kasir ${saved.name}`,
+      },
+    });
+
+    return saved;
   });
 
   return ok({ user: hashlessUser(updated) });
