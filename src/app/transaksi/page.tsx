@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
 import { ReceiptModal } from "@/components/ui/ReceiptModal";
 import { BarcodeScanner } from "@/components/ui/BarcodeScanner";
+import { ProductThumbnail } from "@/components/ui/ProductThumbnail";
 import { useStoreSettings } from "@/lib/use-store-settings";
 import type { SerializedSale } from "@/lib/sales-api";
 
@@ -29,6 +30,8 @@ export interface Product {
   stock: number;
   minimum_stock: number;
   is_active: boolean;
+  image_path?: string | null;
+  image_url?: string | null;
 }
 
 export interface Customer {
@@ -494,6 +497,7 @@ export default function KasirPage() {
                     key={p.id}
                     className="flex items-center gap-3 p-3 rounded-lg border border-line hover:border-primary/40 transition-colors"
                   >
+                    <ProductThumbnail src={p.image_url} alt={p.name} size="md" />
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-foreground truncate">{p.name}</p>
                       <p className="text-xs text-muted truncate">{p.category} · {p.barcode ?? "-"}</p>

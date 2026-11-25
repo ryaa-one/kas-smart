@@ -119,6 +119,7 @@ model Product {
   stock           Int // stok hanya disimpan di tabel ini
   minimum_stock   Int
   is_active       Boolean   @default(true)
+  imagePath       String?   @map("image_path")
 
   category               Category                @relation(fields: [category_id], references: [id])
   purchaseDetails        PurchaseDetail[] // 1 : N purchased as

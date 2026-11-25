@@ -2,6 +2,7 @@
 // Business Rules + ERD PRODUCTS (barcode NULL boleh, UNIQUE bila diisi;
 // harga & stok integer >= 0; harga jual > harga beli; category_id FK wajib).
 import { prisma } from "@/lib/prisma";
+import { getProductImageUrl } from "@/lib/product-storage";
 
 export interface ProductBody {
   name: string;
@@ -12,6 +13,7 @@ export interface ProductBody {
   stock: number;
   minimum_stock: number;
   is_active: boolean;
+  imagePath?: string | null;
 }
 
 export type FieldErrors = Partial<Record<keyof ProductBody, string>>;
@@ -110,6 +112,7 @@ export function serializeProduct<T extends {
   stock: number;
   minimum_stock: number;
   is_active: boolean;
+  imagePath?: string | null;
   category?: { name: string } | null;
 }>(p: T) {
   return {
@@ -123,7 +126,85 @@ export function serializeProduct<T extends {
     stock: p.stock,
     minimum_stock: p.minimum_stock,
     is_active: p.is_active,
+    image_path: p.imagePath ?? null,
+    image_url: getProductImageUrl(p.imagePath),
   };
 }
 
 export const PRODUCT_INCLUDE = { category: { select: { name: true } } } as const;
+
+const PRODUCT_FORM_FIELDS = [
+  "name",
+  "category_id",
+  "barcode",
+  "purchase_price",
+  "selling_price",
+  "stock",
+  "minimum_stock",
+] as const;
+
+export type ParsedProductRequest =
+  | {
+      ok: true;
+      body: Record<string, unknown>;
+      imageFile: File | null;
+      removeImage: boolean;
+    }
+  | { ok: false; code: "invalid_json" | "invalid_form_data" };
+
+/**
+ * Parse body POST/PATCH produk baik dari JSON maupun multipart/form-data.
+ */
+export async function parseProductRequest(
+  request: Request
+): Promise<ParsedProductRequest> {
+  const contentType = request.headers.get("content-type")?.toLowerCase() ?? "";
+
+  if (contentType.includes("multipart/form-data")) {
+    let formData: FormData;
+    try {
+      formData = await request.formData();
+    } catch {
+      return { ok: false, code: "invalid_form_data" };
+    }
+
+    const body: Record<string, unknown> = {};
+    for (const key of PRODUCT_FORM_FIELDS) {
+      const value = formData.get(key);
+      if (typeof value === "string") {
+        body[key] = value;
+      }
+    }
+
+    const activeVal = formData.get("is_active");
+    if (typeof activeVal === "string") {
+      body.is_active = activeVal === "true";
+    }
+
+    const rawImage = formData.get("image");
+    const imageFile =
+      rawImage instanceof File && (rawImage.size > 0 || rawImage.name !== "")
+        ? rawImage
+        : null;
+
+    const removeImage = formData.get("remove_image") === "true";
+
+    return { ok: true, body, imageFile, removeImage };
+  }
+
+  let json: unknown;
+  try {
+    json = await request.json();
+  } catch {
+    return { ok: false, code: "invalid_json" };
+  }
+  if (!json || typeof json !== "object" || Array.isArray(json)) {
+    return { ok: false, code: "invalid_json" };
+  }
+
+  const record = json as Record<string, unknown>;
+  const removeImage =
+    record.remove_image === true || record.image_path === null;
+
+  return { ok: true, body: record, imageFile: null, removeImage };
+}

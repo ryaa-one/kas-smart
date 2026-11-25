@@ -6,9 +6,15 @@ import { prisma } from "@/lib/prisma";
 import { fail, ok, requireOwner } from "@/lib/api-auth";
 import {
   PRODUCT_INCLUDE,
+  parseProductRequest,
   serializeProduct,
   validateProductBody,
 } from "@/lib/product-api";
+import {
+  deleteProductImage,
+  uploadProductImage,
+  validateProductImageFile,
+} from "@/lib/product-storage";
 
 function badId(id: string) {
   return id.length === 0 || id.length > 64 || !/^[\w-]+$/.test(id);
@@ -44,52 +50,107 @@ export async function PATCH(
   const current = await prisma.product.findUnique({ where: { id } });
   if (!current) return fail(404, "product_not_found");
 
-  let body: Record<string, unknown>;
-  try {
-    body = (await request.json()) as Record<string, unknown>;
-  } catch {
-    return fail(400, "invalid_json");
-  }
-  const { errors, data } = await validateProductBody(body, {
+  const parsed = await parseProductRequest(request);
+  if (!parsed.ok) return fail(400, parsed.code);
+
+  const { errors, data } = await validateProductBody(parsed.body, {
     partial: true,
     excludeId: id,
   });
-  if (!data) {
+  if (!data || Object.keys(errors).length > 0) {
     const first = Object.values(errors)[0];
     if (!first) return fail(400, "nothing_to_update");
     return fail(first === "barcode_taken" ? 409 : 400, first);
   }
-  if (Object.keys(data).length === 0) return fail(400, "nothing_to_update");
+
+  let validatedImage: Awaited<ReturnType<typeof validateProductImageFile>> | null = null;
+  if (parsed.imageFile) {
+    validatedImage = await validateProductImageFile(parsed.imageFile);
+    if (!validatedImage.ok) return fail(400, validatedImage.code);
+  }
+
+  const shouldRemoveImage =
+    !validatedImage && parsed.removeImage && current.imagePath !== null;
+  if (
+    Object.keys(data).length === 0 &&
+    !validatedImage &&
+    !parsed.removeImage
+  ) {
+    return fail(400, "nothing_to_update");
+  }
+
+  // Upload gambar baru terlebih dahulu sebelum update DB
+  let uploadedPath: string | null = null;
+  if (validatedImage && validatedImage.ok) {
+    try {
+      uploadedPath = await uploadProductImage(
+        validatedImage.buffer,
+        validatedImage.mimeType,
+        validatedImage.ext
+      );
+    } catch (err) {
+      console.error("[PATCH /api/products/[id]] Upload gambar gagal:", err);
+      return fail(502, "image_upload_failed");
+    }
+  }
+
+  const updateData = {
+    ...data,
+    ...(uploadedPath
+      ? { imagePath: uploadedPath }
+      : shouldRemoveImage
+        ? { imagePath: null }
+        : {}),
+  };
+
+  if (Object.keys(updateData).length === 0) {
+    return fail(400, "nothing_to_update");
+  }
 
   const toggleOnly =
-    Object.keys(data).length === 1 && data.is_active !== undefined;
+    Object.keys(updateData).length === 1 && updateData.is_active !== undefined;
 
-  const updated = await prisma
-    .$transaction(async (tx) => {
+  let updated: Awaited<ReturnType<typeof prisma.product.update>> | null = null;
+  try {
+    updated = await prisma.$transaction(async (tx) => {
       const prod = await tx.product.update({
         where: { id },
-        data,
+        data: updateData,
         include: PRODUCT_INCLUDE,
       });
 
       await tx.activityLog.create({
         data: {
           user_id: guard.id,
-          action: toggleOnly && !data.is_active ? "productDeactivate" : "productEdit",
+          action: toggleOnly && !updateData.is_active ? "productDeactivate" : "productEdit",
           description: toggleOnly
-            ? `${data.is_active ? "Aktifkan kembali" : "Nonaktifkan"} produk ${prod.name}`
+            ? `${updateData.is_active ? "Aktifkan kembali" : "Nonaktifkan"} produk ${prod.name}`
             : `Ubah produk ${prod.name}`,
         },
       });
 
       return prod;
-    })
-    .catch((e: unknown) => {
-      // Balapan barcode (UNIQUE db penjaga terakhir).
-      if ((e as { code?: string })?.code === "P2002") return null;
-      throw e;
     });
-  if (!updated) return fail(409, "barcode_taken");
+  } catch (e: unknown) {
+    // Jika update DB gagal, hapus gambar baru yang terlanjur diunggah, jangan sentuh gambar lama
+    if (uploadedPath) {
+      await deleteProductImage(uploadedPath);
+    }
+    if ((e as { code?: string })?.code === "P2002") {
+      return fail(409, "barcode_taken");
+    }
+    throw e;
+  }
+
+  // DB berhasil diperbarui: bersihkan gambar lama bila diganti atau dihapus
+  if (
+    current.imagePath &&
+    (uploadedPath || shouldRemoveImage) &&
+    current.imagePath !== uploadedPath
+  ) {
+    await deleteProductImage(current.imagePath);
+  }
+
   return ok({ product: serializeProduct(updated) });
 }
 
@@ -166,6 +227,11 @@ export async function DELETE(
       });
     }
     throw e;
+  }
+
+  // Bersihkan gambar di Storage hanya setelah penghapusan DB berhasil (best-effort)
+  if (product.imagePath) {
+    await deleteProductImage(product.imagePath);
   }
 
   return ok({ deleted: true, id: product.id });

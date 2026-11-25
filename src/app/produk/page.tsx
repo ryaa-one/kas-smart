@@ -3,7 +3,7 @@
 // UC-04 Mengelola Produk — SUMBER DATA: database via API (tanpa fallback mock).
 // GET/POST /api/products | PATCH /api/products/:id | DELETE (soft: is_active=false)
 // UI (layout, search, filter, modal, scanner ZXing, i18n) dipertahankan 1:1.
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLang } from "@/lib/i18n/LanguageContext";
 import { useAuth } from "@/lib/auth";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
@@ -16,6 +16,12 @@ import { Modal } from "@/components/ui/Modal";
 import { BarcodeScanner } from "@/components/ui/BarcodeScanner";
 import { Table, Th, Td } from "@/components/ui/Table";
 import { Pagination } from "@/components/ui/Pagination";
+import { ProductThumbnail } from "@/components/ui/ProductThumbnail";
+import {
+  ImageCompressionError,
+  compressProductImage,
+  formatFileSize,
+} from "@/lib/image-compression";
 import { formatRupiah } from "@/lib/format";
 
 interface ApiProduct {
@@ -29,6 +35,8 @@ interface ApiProduct {
   stock: number;
   minimum_stock: number;
   is_active: boolean;
+  image_path: string | null;
+  image_url: string | null;
 }
 interface ApiCategory {
   id: string;
@@ -44,6 +52,7 @@ interface FormState {
   stock: string;
   minimum_stock: string;
   is_active: boolean;
+  image?: string;
 }
 
 const emptyForm: FormState = {
@@ -79,6 +88,34 @@ export default function ProdukPage() {
   const [form, setForm] = useState<FormState>(emptyForm);
   const [errors, setErrors] = useState<Partial<Record<keyof FormState, string>>>({});
   const [scannerOpen, setScannerOpen] = useState(false);
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [removeImage, setRemoveImage] = useState(false);
+  const [compressing, setCompressing] = useState(false);
+  const [compressionInfo, setCompressionInfo] = useState<{
+    originalSize: number;
+    compressedSize: number;
+    savedPercent: number;
+  } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const compressionTokenRef = useRef(0);
+  const previewUrlRef = useRef<string | null>(null);
+
+  const clearObjectUrl = (url: string | null) => {
+    if (url && url.startsWith("blob:")) {
+      URL.revokeObjectURL(url);
+    }
+  };
+
+  useEffect(() => {
+    previewUrlRef.current = imagePreview;
+  }, [imagePreview]);
+
+  useEffect(() => {
+    return () => {
+      clearObjectUrl(previewUrlRef.current);
+    };
+  }, []);
 
   const msg = (code: string): string => {
     switch (code) {
@@ -91,6 +128,10 @@ export default function ProdukPage() {
       case "minimum_stock_invalid": return p.errorStockNegative;
       case "barcode_taken": return p.errorBarcodeDuplicate;
       case "barcode_invalid": return p.errorBarcodeInvalid;
+      case "image_invalid_type": return p.errorImageInvalidType;
+      case "image_too_large": return p.errorImageTooLarge;
+      case "image_empty": return p.errorImageEmpty;
+      case "image_upload_failed": return p.errorImageUpload;
       case "product_in_use": return p.errorDeleteInUse;
       case "product_in_use_sales": return p.errorDeleteInUseSales;
       case "product_in_use_purchases": return p.errorDeleteInUsePurchases;
@@ -200,13 +241,23 @@ export default function ProdukPage() {
   }, [filtered, safePage, pageSize]);
 
   const openAdd = () => {
+    compressionTokenRef.current += 1;
+    clearObjectUrl(imagePreview);
     setEditing(null);
     setForm(emptyForm);
+    setImageFile(null);
+    setImagePreview(null);
+    setRemoveImage(false);
+    setCompressing(false);
+    setCompressionInfo(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
     setErrors({});
     setModalOpen(true);
   };
 
   const openEdit = (pr: ApiProduct) => {
+    compressionTokenRef.current += 1;
+    clearObjectUrl(imagePreview);
     setEditing(pr);
     setForm({
       barcode: pr.barcode ?? "", // null → kosong, BUKAN "-" (H-2)
@@ -218,8 +269,113 @@ export default function ProdukPage() {
       minimum_stock: String(pr.minimum_stock),
       is_active: pr.is_active,
     });
+    setImageFile(null);
+    setImagePreview(pr.image_url ?? null);
+    setRemoveImage(false);
+    setCompressing(false);
+    setCompressionInfo(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
     setErrors({});
     setModalOpen(true);
+  };
+
+  const compressionErrorMessage = (err: unknown): string => {
+    if (err instanceof ImageCompressionError) {
+      switch (err.code) {
+        case "image_empty":
+          return p.errorImageEmpty;
+        case "image_invalid_type":
+          return p.errorImageInvalidType;
+        case "image_raw_too_large":
+          return p.errorImageRawTooLarge;
+        case "compressed_too_large":
+          return p.errorImageStillTooLarge;
+        case "webp_encode_failed":
+          return p.errorImageWebpUnsupported;
+        case "image_decode_failed":
+        case "image_invalid_dimensions":
+          return p.errorImageDecode;
+      }
+    }
+    return p.errorImageDecode;
+  };
+
+  const handleImageSelect = async (file: File | undefined) => {
+    const token = ++compressionTokenRef.current;
+    setErrors((prev) => ({ ...prev, image: undefined }));
+    setCompressionInfo(null);
+
+    if (!file) return;
+
+    // Pastikan tidak ada file mentah tersimpan selama/jika kompresi gagal
+    setImageFile(null);
+    setCompressing(true);
+
+    try {
+      const result = await compressProductImage(file);
+      if (compressionTokenRef.current !== token) {
+        // Pemilihan gambar baru sudah menggantikan proses ini — abaikan hasil usang
+        return;
+      }
+
+      const nextPreviewUrl = URL.createObjectURL(result.file);
+      clearObjectUrl(previewUrlRef.current);
+      setImageFile(result.file);
+      setImagePreview(nextPreviewUrl);
+      setRemoveImage(false);
+      setCompressionInfo({
+        originalSize: result.originalSize,
+        compressedSize: result.compressedSize,
+        savedPercent: result.savedPercent,
+      });
+    } catch (err) {
+      if (compressionTokenRef.current !== token) return;
+      clearObjectUrl(previewUrlRef.current);
+      setImageFile(null);
+      setCompressionInfo(null);
+      // Pertahankan gambar lama di preview jika sedang edit & kompresi gagal
+      setImagePreview(editing?.image_url ?? null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      setErrors((prev) => ({ ...prev, image: compressionErrorMessage(err) }));
+    } finally {
+      if (compressionTokenRef.current === token) {
+        setCompressing(false);
+      }
+    }
+  };
+
+  const handleCancelSelectedImage = () => {
+    compressionTokenRef.current += 1;
+    clearObjectUrl(imagePreview);
+    setCompressing(false);
+    setImageFile(null);
+    setCompressionInfo(null);
+    setImagePreview(removeImage ? null : (editing?.image_url ?? null));
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    setErrors((prev) => ({ ...prev, image: undefined }));
+  };
+
+  const handleRemoveSavedImage = () => {
+    compressionTokenRef.current += 1;
+    clearObjectUrl(imagePreview);
+    setCompressing(false);
+    setImageFile(null);
+    setCompressionInfo(null);
+    setImagePreview(null);
+    setRemoveImage(true);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    setErrors((prev) => ({ ...prev, image: undefined }));
+  };
+
+  const closeModal = () => {
+    if (saving) return;
+    compressionTokenRef.current += 1;
+    clearObjectUrl(imagePreview);
+    setCompressing(false);
+    setImageFile(null);
+    setCompressionInfo(null);
+    setImagePreview(null);
+    setModalOpen(false);
   };
 
   // Validasi utama di SERVER; cek cepat client-side sebatas field wajib
@@ -233,17 +389,22 @@ export default function ProdukPage() {
   };
 
   const submit = async () => {
-    if (!validate() || !user) return;
-    const payload = {
-      barcode: form.barcode.trim() || null, // null = tanpa barcode (ERD)
-      name: form.name.trim(),
-      category_id: form.category_id,
-      purchase_price: parseInt(form.purchase_price, 10) || 0,
-      selling_price: parseInt(form.selling_price, 10) || 0,
-      stock: parseInt(form.stock, 10) || 0,
-      minimum_stock: parseInt(form.minimum_stock, 10) || 0,
-      is_active: form.is_active,
-    };
+    if (!validate() || !user || compressing || saving) return;
+    const formData = new FormData();
+    formData.set("barcode", form.barcode.trim());
+    formData.set("name", form.name.trim());
+    formData.set("category_id", form.category_id);
+    formData.set("purchase_price", String(parseInt(form.purchase_price, 10) || 0));
+    formData.set("selling_price", String(parseInt(form.selling_price, 10) || 0));
+    formData.set("stock", String(parseInt(form.stock, 10) || 0));
+    formData.set("minimum_stock", String(parseInt(form.minimum_stock, 10) || 0));
+    formData.set("is_active", String(form.is_active));
+    if (imageFile) {
+      formData.set("image", imageFile);
+    } else if (editing && removeImage) {
+      formData.set("remove_image", "true");
+    }
+
     setSaving(true);
     setErrors({});
     try {
@@ -251,13 +412,16 @@ export default function ProdukPage() {
         editing ? `/api/products/${editing.id}` : "/api/products",
         {
           method: editing ? "PATCH" : "POST",
-          headers: { "Content-Type": "application/json" },
           credentials: "same-origin",
-          body: JSON.stringify(payload),
+          body: formData,
         }
       );
       const json = (await res.json().catch(() => null)) as { error?: string } | null;
       if (res.ok) {
+        clearObjectUrl(imagePreview);
+        setImageFile(null);
+        setImagePreview(null);
+        setRemoveImage(false);
         setModalOpen(false);
         await refresh();
         setToast({
@@ -276,6 +440,10 @@ export default function ProdukPage() {
           minimum_stock_invalid: "minimum_stock",
           barcode_taken: "barcode",
           barcode_invalid: "barcode",
+          image_invalid_type: "image",
+          image_too_large: "image",
+          image_empty: "image",
+          image_upload_failed: "image",
         };
         showErr(code, fieldMap[code]);
       }
@@ -451,6 +619,7 @@ export default function ProdukPage() {
               head={
                 <>
                   <Th>{p.tableBarcode}</Th>
+                  <Th>{p.tableImage}</Th>
                   <Th>{p.tableProduct}</Th>
                   <Th>{p.tableCategory}</Th>
                   <Th className="text-right">{p.tablePurchasePrice}</Th>
@@ -465,6 +634,9 @@ export default function ProdukPage() {
                 <tr key={pr.id} className="hover:bg-zinc-50/70">
                   <Td className="tabular-nums text-muted whitespace-nowrap">
                     {pr.barcode ?? <span className="italic">{p.noBarcode}</span>}
+                  </Td>
+                  <Td>
+                    <ProductThumbnail src={pr.image_url} alt={pr.name} size="sm" />
                   </Td>
                   <Td className="font-medium text-foreground">{pr.name}</Td>
                   <Td className="text-muted">{catName(pr.category_id)}</Td>
@@ -533,16 +705,20 @@ export default function ProdukPage() {
       {/* Modal Tambah/Ubah Produk */}
       <Modal
         open={modalOpen}
-        onClose={() => setModalOpen(false)}
+        onClose={closeModal}
         title={editing ? p.editTitle : p.addTitle}
         wide
         footer={
           <>
-            <Button variant="secondary" onClick={() => setModalOpen(false)}>
+            <Button variant="secondary" onClick={closeModal} disabled={saving}>
               {t.common.cancel}
             </Button>
-            <Button onClick={submit} disabled={saving}>
-              {t.common.save}
+            <Button onClick={submit} disabled={saving || compressing}>
+              {compressing
+                ? p.compressingImage
+                : saving
+                  ? t.common.loading
+                  : t.common.save}
             </Button>
           </>
         }
@@ -593,6 +769,78 @@ export default function ProdukPage() {
               placeholder={p.fieldNamePlaceholder}
               error={errors.name}
             />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="text-sm font-medium text-foreground block mb-1.5">
+              {p.fieldImage}
+            </label>
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-3 rounded-lg border border-line bg-zinc-50/50">
+              <ProductThumbnail
+                src={imagePreview}
+                alt={form.name || p.fieldImage}
+                size="lg"
+              />
+              <div className="flex-1 min-w-0 space-y-2">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  disabled={saving}
+                  onChange={(e) => {
+                    void handleImageSelect(e.target.files?.[0]);
+                  }}
+                  className="block w-full text-xs text-muted file:mr-2 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-primary/10 file:text-primary file:text-xs file:font-medium file:cursor-pointer cursor-pointer disabled:opacity-50"
+                />
+                <p className="text-[11px] text-muted">{p.fieldImageHint}</p>
+                {compressing && (
+                  <p className="text-xs text-primary font-medium" role="status">
+                    {p.compressingImage}
+                  </p>
+                )}
+                {!compressing && compressionInfo && (
+                  <p className="text-xs text-success font-medium" role="status">
+                    {p.imageCompressionStats
+                      .replace("{before}", formatFileSize(compressionInfo.originalSize))
+                      .replace("{after}", formatFileSize(compressionInfo.compressedSize))}
+                    {compressionInfo.savedPercent > 0
+                      ? ` ${p.imageCompressionSaved.replace("{percent}", String(compressionInfo.savedPercent))}`
+                      : ""}
+                  </p>
+                )}
+                <div className="flex flex-wrap items-center gap-2">
+                  {imageFile && (
+                    <button
+                      type="button"
+                      disabled={saving}
+                      onClick={handleCancelSelectedImage}
+                      className="text-xs font-medium text-muted hover:text-foreground underline underline-offset-2 cursor-pointer"
+                    >
+                      {p.cancelImageSelect}
+                    </button>
+                  )}
+                  {editing && editing.image_url && !removeImage && !imageFile && (
+                    <button
+                      type="button"
+                      disabled={saving}
+                      onClick={handleRemoveSavedImage}
+                      className="text-xs font-medium text-danger hover:underline underline-offset-2 cursor-pointer"
+                    >
+                      {p.removeImage}
+                    </button>
+                  )}
+                  {editing && removeImage && !imageFile && (
+                    <span className="text-xs text-warning font-medium">
+                      {p.imageRemovedPending}
+                    </span>
+                  )}
+                </div>
+                {errors.image && (
+                  <p className="text-xs text-danger" role="alert">
+                    {errors.image}
+                  </p>
+                )}
+              </div>
+            </div>
           </div>
           <Input
             type="number"
